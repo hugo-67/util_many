@@ -1433,6 +1433,13 @@ self.onmessage = async ({ data: m }) => {
     }
     function tX(time, g) { return g.left + (time - app.start) / app.span * g.w; }
     function fY(f, g) { return g.top + (1 - scaleFraction(f)) * g.h; }
+    function frequencyTick(hz) {
+        // Period puts many ticks below 10 Hz; labeling all in kHz would show 0.00.
+        if (hz >= 1000) return fmt(hz / 1000, hz >= 10000 ? 1 : 2) + 'k';
+        if (hz >= 100) return fmt(hz, 0);
+        if (hz >= 10) return fmt(hz, 1);
+        return fmt(hz, 2);
+    }
     function drawBase(canvas, isSpec) {
         const { ctx, g } = sizedContext(canvas);
         ctx.clearRect(0, 0, g.width, g.height);
@@ -1489,7 +1496,7 @@ self.onmessage = async ({ data: m }) => {
         const f = getDisplayFreqRange();
         for (let i = 0; i <= 4; i++) {
             const y = g.top + i * g.h / 4;
-            ctx.fillText(isSpec ? fmt(fractionHz(1 - i / 4, f) / 1000, 2) : fmt((1 - i / 2) / Number($('amplitude').value), 2), g.left - 7, y + 4);
+            ctx.fillText(isSpec ? frequencyTick(fractionHz(1 - i / 4, f)) : fmt((1 - i / 2) / Number($('amplitude').value), 2), g.left - 7, y + 4);
             ctx.beginPath();
             ctx.moveTo(g.left, y);
             ctx.lineTo(g.left + g.w, y);
@@ -1498,7 +1505,7 @@ self.onmessage = async ({ data: m }) => {
             ctx.globalAlpha = 1;
         }
         ctx.textAlign = 'left';
-        ctx.fillText(isSpec ? 'Spectrogram · kHz' : 'Waveform · full scale', 8, 14);
+        ctx.fillText(isSpec ? 'Spectrogram · Hz (k = 1000 Hz)' : 'Waveform · full scale', 8, 14);
         ctx.textAlign = 'right';
         ctx.fillStyle = app.renderPending ? '#ffda86' : '#d8e3ef';
         ctx.fillText(app.renderPending ? 'Updating preview…' : isSpec ? 'Hann · dBFS' : '', g.width - 12, 14);
