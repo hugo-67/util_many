@@ -20,7 +20,7 @@ Hold an alphanumeric key when drawing for case-sensitive tags, like the video to
 JSON/CSV import is validated atomically; merge/replace, tags, metadata and all marker
 types round-trip. History uses bounded transactions rather than per-click snapshots.
 All user text enters the DOM through textContent/value, never interpolated HTML.
-See README.md/AGENTS.md for repository conventions; README is generated, not edited.
+Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransform supplies FFT image rows, axis ticks, mouse frequency and annotations.\nSee README.md/AGENTS.md for repository conventions; README is generated, not edited.
 -->
 <html lang="en">
 <head>
@@ -988,7 +988,7 @@ self.onmessage = async ({ data: m }) => {
                 return z < 2 ? z + .15 * (2 - z) : z > 20.1 ? z + .22 * (z - 20.1) : z;
             }
             case 'erb': return 11.17268 * Math.log1p(46.06538 * hz / (hz + 14678.49));
-            case 'period': return -1 / Math.max(1, hz);
+            case 'period': return -1 / Math.max(1e-12, hz);
             default: return hz;
         }
     }
@@ -1008,7 +1008,7 @@ self.onmessage = async ({ data: m }) => {
             default: return value;
         }
     }
-    function currentScale() { return $('frequencyScale').value; }
+    function currentScale() { const selected = $('frequencyScale').value; return SCALES.includes(selected) ? selected : 'linear'; }
     function getDisplayFreqRange() {
         const nyquist = app.meta ? app.meta.sampleRate / 2 : 48000;
         const type = currentScale();
