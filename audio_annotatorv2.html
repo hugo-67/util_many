@@ -1022,7 +1022,8 @@ self.onmessage = async ({ data: m }) => {
     }
     function scaleFraction(hz, range = getDisplayFreqRange(), type = currentScale()) {
         const lo = hzToAxis(range.min, type), hi = hzToAxis(range.max, type);
-        return (hzToAxis(Math.max(range.min, hz), type) - lo) / (hi - lo);
+        // Do not pin off-band markers to the visible edge; let canvas clipping hide them.
+        return (hzToAxis(hz, type) - lo) / (hi - lo);
     }
     function fractionHz(fraction, range = getDisplayFreqRange(), type = currentScale()) {
         const lo = hzToAxis(range.min, type), hi = hzToAxis(range.max, type);
@@ -1436,10 +1437,12 @@ self.onmessage = async ({ data: m }) => {
         const r = app.lastRender;
         if (r && app.meta) {
             const x = tX(r.start, g), w = r.span / app.span * g.w;
-            if (isSpec && r.scale === currentScale()) {
-                const y = fY(r.fmax, g), h = fY(r.fmin, g) - y;
-                ctx.imageSmoothingEnabled = false;
-                ctx.drawImage(r.image, x, y, w, h);
+            if (isSpec) {
+                if (r.scale === currentScale()) {
+                    const y = fY(r.fmax, g), h = fY(r.fmin, g) - y;
+                    ctx.imageSmoothingEnabled = false;
+                    ctx.drawImage(r.image, x, y, w, h);
+                }
             }
             else {
                 const amp = Number($('amplitude').value);
