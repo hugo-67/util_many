@@ -1029,7 +1029,15 @@ self.onmessage = async ({ data: m }) => {
         const lo = hzToAxis(range.min, type), hi = hzToAxis(range.max, type);
         return clamp(axisToHz(lo + clamp(fraction, 0, 1) * (hi - lo), type), range.min, range.max);
     }
-    function updateFreqControls() { const f = getDisplayFreqRange(); $('displayFreqMin').value = fmt(f.min); $('displayFreqMax').value = fmt(f.max); $('displayFreqMin').max = $('displayFreqMax').max = app.meta ? app.meta.sampleRate / 2 : 48000; return f; }
+    function updateFreqControls() {
+        const f = getDisplayFreqRange();
+        // Preserve an entered 0 Hz even if Log/Period internally use 1 Hz;
+        // switching back to a zero-capable scale then restores the full band.
+        if (Number($('displayFreqMin').value) !== 0) $('displayFreqMin').value = fmt(f.min);
+        $('displayFreqMax').value = fmt(f.max);
+        $('displayFreqMin').max = $('displayFreqMax').max = app.meta ? app.meta.sampleRate / 2 : 48000;
+        return f;
+    }
     const readyControls = ['channel', 'playPauseBtn', 'stopBtn', 'prevBtn', 'nextBtn', 'gotoBtn', 'scrubSlider', 'zoomIn', 'zoomOut', 'fitBtn', 'panLeft', 'panRight', 'scrollSlider', 'fullBandBtn', 'overviewBtn', 'addPointBtn', 'exportJson', 'exportCsv', 'importBtn'];
     function ready(enabled) {
         for (const id of readyControls)
