@@ -18,7 +18,7 @@ frequency values remain **Hz**, including when importing and exporting files.
 | Mel | `1127 ln(1 + f/700)` | Approximate perceptual pitch spacing |
 | Bark | Traunmüller's corrected critical-band formula | Psychoacoustic comparisons |
 | ERB | `11.17268 ln(1 + 46.06538 f/(f + 14678.49))` | Auditory filter bandwidth-oriented display |
-| Period | `−1 / max(1, f)` | A reciprocal-frequency viewpoint; useful mainly for Audacity's Pitch/EAC mode |
+| Period | `−1/f` (with a positive display floor) | A reciprocal-frequency viewpoint; useful mainly for Audacity's Pitch/EAC mode |
 
 For **Bark**, set `z = 26.81 f/(1960 + f) − 0.53`. Use
 `z + 0.15(2 − z)` for `z < 2`, `z + 0.22(z − 20.1)` for
