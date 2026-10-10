@@ -20,7 +20,7 @@ Hold an alphanumeric key when drawing for case-sensitive tags, like the video to
 JSON/CSV import is validated atomically; merge/replace, tags, metadata and all marker
 types round-trip. History uses bounded transactions rather than per-click snapshots.
 All user text enters the DOM through textContent/value, never interpolated HTML.
-See README.md/AGENTS.md for repository conventions; README is generated, not edited.
+Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransform supplies FFT image rows, axis ticks, mouse frequency and annotations.\nSee README.md/AGENTS.md for repository conventions; README is generated, not edited.
 -->
 <html lang="en">
 <head>
@@ -44,7 +44,7 @@ See README.md/AGENTS.md for repository conventions; README is generated, not edi
 </section>
 <section class="panel" aria-label="View settings">
 <div class="row"><button id="zoomIn" disabled>Zoom +</button><button id="zoomOut" disabled>Zoom −</button><button id="fitBtn" disabled>Fit recording</button><label>Window (s) <input id="windowSeconds" type="number" min="0.000001" step="any" value="10"></label><label>Channel <select id="channel"><option value="0">1</option></select></label><label>Wave amplitude <select id="amplitude"><option>0.1</option><option>0.25</option><option>0.5</option><option selected>1</option><option>2</option><option>4</option><option>8</option><option>16</option><option>32</option><option>64</option><option>128</option><option>512</option></select>×</label><button id="overviewBtn" disabled>Build exact overview</button><progress id="overviewProgress" max="1" value="0" aria-label="Overview indexing progress"></progress></div>
-<div class="row"><label>FFT <select id="fftSize"><option>32</option><option>64</option><option>128</option><option>256</option><option>512</option><option>1024</option><option selected>2048</option><option>4096</option><option>8192</option><option>16384</option></select></label><label>Frequency min (Hz) <input id="displayFreqMin" type="number" min="0" step="any" value="0"></label><label>max (Hz) <input id="displayFreqMax" type="number" min="1" step="any" value="48000"></label><button id="fullBandBtn" disabled>Full Nyquist band</button><label>Floor (dBFS) <input id="dbMin" type="number" min="-180" max="0" value="-100"></label><label>Ceiling <input id="dbMax" type="number" min="-179" max="20" value="0"></label><label>Color <select id="colorMap"><option value="ember">Ember</option><option value="gray">Grayscale</option><option value="ocean">Ocean</option></select></label><span id="frequencyLegend" aria-hidden="true"></span></div>
+<div class="row"><label>FFT <select id="fftSize"><option>32</option><option>64</option><option>128</option><option>256</option><option>512</option><option>1024</option><option selected>2048</option><option>4096</option><option>8192</option><option>16384</option></select></label><label>Y-axis scale <select id="frequencyScale" title="Frequency-axis display mapping; annotations remain stored in Hz"><option value="linear" selected>Linear (Hz)</option><option value="log">Logarithmic (octaves)</option><option value="mel">Mel</option><option value="bark">Bark</option><option value="erb">ERB</option><option value="period">Period (1/f)</option></select></label><label>Frequency min (Hz) <input id="displayFreqMin" type="number" min="0" step="any" value="0"></label><label>max (Hz) <input id="displayFreqMax" type="number" min="1" step="any" value="48000"></label><button id="fullBandBtn" disabled>Full Nyquist band</button><label>Floor (dBFS) <input id="dbMin" type="number" min="-180" max="0" value="-100"></label><label>Ceiling <input id="dbMax" type="number" min="-179" max="20" value="0"></label><label>Color <select id="colorMap"><option value="ember">Ember</option><option value="gray">Grayscale</option><option value="ocean">Ocean</option></select></label><span id="frequencyLegend" aria-hidden="true"></span></div>
 <div class="row"><button id="panLeft" disabled>◀ Pan</button><input id="scrollSlider" aria-label="Visible window start" type="range" min="0" max="1" step="any" value="0" disabled><button id="panRight" disabled>Pan ▶</button><output id="viewLabel">No window</output></div>
 </section>
 <div class="split">
@@ -68,7 +68,7 @@ See README.md/AGENTS.md for repository conventions; README is generated, not edi
 <section id="editor" class="panel"><h2>Selected marker</h2><p id="selectionInfo" class="hint">Select a marker from the table, or click one in Navigate mode.</p><fieldset id="editFields" disabled style="border:0;padding:0;margin:0"><div class="row"><label class="stack">Start (s)<input id="editStart" type="number" step="any"></label><label class="stack">End (s)<input id="editEnd" type="number" step="any"></label></div><div class="row"><label class="stack">Frequency min / point (Hz)<input id="editMin" type="number" step="any"></label><label class="stack">Frequency max (Hz)<input id="editMax" type="number" step="any"></label></div><div class="row"><label class="stack">Tag<input id="editTag" maxlength="64"></label></div><div class="row"><label class="stack">Label<textarea id="editLabel" rows="2" maxlength="2000"></textarea></label></div><div class="row"><button id="saveMarker">Save</button><button id="deleteMarker">Delete</button></div></fieldset></section>
 </aside>
 </div>
-<details class="panel"><summary>Help, accuracy and large-file behavior</summary><p>Navigate: click to seek, drag to pan. Point: click either view (a spectrogram point also stores frequency). Time range: drag horizontally in either view. Frequency range: drag a time/frequency box in the spectrogram. Reversed drags are normalized; coordinates are clamped to the recording and Nyquist band.</p><p><kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> step · <kbd>Home</kbd>/<kbd>End</kbd> seek · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl/Cmd+Z</kbd> undo · <kbd>Ctrl/Cmd+Shift+Z</kbd> redo · <kbd>Delete</kbd> remove selected · <kbd>Escape</kbd> cancel drawing.</p><p>File sample rate and playback output rate are distinct. Analysis retains the file’s native samples, including ultrasound. Playback attempts a native-rate AudioContext and reports any fallback. Changing speed changes pitch; slowing down makes ultrasonic content audible. Output is anti-aliased, and your speakers still have their own frequency limits.</p><p>The waveform is exact in sufficiently narrow windows. Wide previews sample short intervals per screen column and can miss isolated events. Build exact overview scans the file cooperatively into a bounded min/max index; it does not retain the recording. Indexed overview bins preserve peaks but may extend slightly beyond a pixel’s time interval. Spectrograms use hop-aligned Hann windows and peak-bin dBFS, not a calibrated power-spectral-density scale. Wide spectrogram views sample time columns; zoom in to inspect short events.</p><p>Audio bytes, decoded FLAC frames, FFTs and playback lookahead have fixed budgets. Closing/replacing a file terminates its workers and drops caches. A cancelled or superseded render cannot overwrite a newer view. WAV PCM/float and native FLAC are supported; other formats must first be converted to WAV/FLAC. Corrupt, truncated or unsupported files produce an error rather than silently resampling or allocating a whole-file buffer.</p><p>JSON is the preferred lossless interchange. CSV has an explicit metadata row and quoted fields, including multiline labels; user text has a reversible apostrophe prefix for spreadsheet safety. Import validates all records before any change, detects file mismatches and offers merge or replace. Export regularly: annotations are not automatically saved to disk.</p></details>
+<details class="panel"><summary>Help, accuracy and large-file behavior</summary><p>Navigate: click to seek, drag to pan. Point: click either view (a spectrogram point also stores frequency). Time range: drag horizontally in either view. Frequency range: drag a time/frequency box in the spectrogram. Reversed drags are normalized; coordinates are clamped to the recording and Nyquist band.</p><p><kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> step · <kbd>Home</kbd>/<kbd>End</kbd> seek · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl/Cmd+Z</kbd> undo · <kbd>Ctrl/Cmd+Shift+Z</kbd> redo · <kbd>Delete</kbd> remove selected · <kbd>Escape</kbd> cancel drawing.</p><p>File sample rate and playback output rate are distinct. Analysis retains the file’s native samples, including ultrasound. Playback attempts a native-rate AudioContext and reports any fallback. Changing speed changes pitch; slowing down makes ultrasonic content audible. Output is anti-aliased, and your speakers still have their own frequency limits.</p><p>Spectrogram Y-axis scale: Linear (uniform Hz, good for ultrasound/harmonics), Logarithmic (equal spacing by octave), Mel, Bark, ERB (perceptual mappings), or Period (1/f; mostly useful with pitch/EAC views in Audacity). These are <strong>display-only</strong> coordinate transforms on the native FFT, not Mel/Bark/ERB filterbanks or an EAC calculation. Logarithmic and Period displays clamp the minimum frequency to 1 Hz because 0 is singular; annotations remain in Hz and exports include the chosen viewing scale.</p><p>The waveform is exact in sufficiently narrow windows. Wide previews sample short intervals per screen column and can miss isolated events. Build exact overview scans the file cooperatively into a bounded min/max index; it does not retain the recording. Indexed overview bins preserve peaks but may extend slightly beyond a pixel’s time interval. Spectrograms use hop-aligned Hann windows and peak-bin dBFS, not a calibrated power-spectral-density scale. Wide spectrogram views sample time columns; zoom in to inspect short events.</p><p>Audio bytes, decoded FLAC frames, FFTs and playback lookahead have fixed budgets. Closing/replacing a file terminates its workers and drops caches. A cancelled or superseded render cannot overwrite a newer view. WAV PCM/float and native FLAC are supported; other formats must first be converted to WAV/FLAC. Corrupt, truncated or unsupported files produce an error rather than silently resampling or allocating a whole-file buffer.</p><p>JSON is the preferred lossless interchange. CSV has an explicit metadata row and quoted fields, including multiline labels; user text has a reversible apostrophe prefix for spreadsheet safety. Import validates all records before any change, detects file mismatches and offers merge or replace. Export regularly: annotations are not automatically saved to disk.</p></details>
 <script id="audio-worker" type="text/plain">
 'use strict';
 const MiB = 1048576, PAGE = 65536;
@@ -716,9 +716,15 @@ async function render(p, token) {
     if (!(end > start))
         throw Error('Invalid display window.');
     const { wave, mode } = await envelope(start, end, width, p.channel, token), spanSamples = (end - start) * source.sampleRate, columns = Math.min(width, spanSamples > 50000000 ? 192 : 640), pixels = new Uint8ClampedArray(columns * height * 4), colors = palette(p.color), hop = n / 4;
-    const bins = new Array(height);
+    // Frequency edges originate from the same axis transform used by the UI,
+    // rulers, hit-testing and annotation overlays. They are in native Hz.
+    if (!Array.isArray(p.frequencyEdges) || p.frequencyEdges.length !== height + 1)
+        throw Error('Invalid frequency axis geometry.');
+    const bins = new Array(height), nyquist = source.sampleRate / 2;
     for (let y = 0; y < height; y++) {
-        const f1 = p.fmax - (y + 1) / height * (p.fmax - p.fmin), f2 = p.fmax - y / height * (p.fmax - p.fmin);
+        const f2 = p.frequencyEdges[y], f1 = p.frequencyEdges[y + 1];
+        if (!Number.isFinite(f1) || !Number.isFinite(f2) || f1 < 0 || f2 > nyquist + 1e-7 || f2 < f1)
+            throw Error('Non-monotonic or out-of-range frequency scale.');
         bins[y] = [clamp(Math.floor(f1 * n / source.sampleRate), 0, n / 2), clamp(Math.ceil(f2 * n / source.sampleRate), 0, n / 2)];
     }
     for (let x = 0; x < columns; x++) {
@@ -745,7 +751,7 @@ async function render(p, token) {
             await sleep();
     }
     guard(token);
-    return { start, span: end - start, fmin: p.fmin, fmax: p.fmax, wave, mode, width, columns, height, pixels, fft: n, elapsedMs: performance.now() - started, stats: statistics() };
+    return { start, span: end - start, fmin: p.fmin, fmax: p.fmax, scale: p.scale, wave, mode, width, columns, height, pixels, fft: n, elapsedMs: performance.now() - started, stats: statistics() };
 }
 async function renderLoop() {
     if (renderBusy)
@@ -969,16 +975,69 @@ self.onmessage = async ({ data: m }) => {
     function fmt(v, digits = 6) { return Number(v.toFixed(digits)).toString(); }
     function uid() { return globalThis.crypto?.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + '-' + Math.random().toString(36).slice(2); }
     function channel() { return Number($('channel').value); }
+    // Audacity-compatible display transforms (not filterbanks). Keep Hz as the
+    // canonical unit for every selection, marker and exported annotation.
+    // Source: Audacity NumberScale (Mel, Traunmueller Bark, ERB and Period).
+    const SCALES = Object.freeze(['linear', 'log', 'mel', 'bark', 'erb', 'period']);
+    function hzToAxis(hz, type) {
+        switch (type) {
+            case 'log': return Math.log(Math.max(1e-12, hz));
+            case 'mel': return 1127 * Math.log1p(hz / 700);
+            case 'bark': {
+                const z = 26.81 * hz / (1960 + hz) - .53;
+                return z < 2 ? z + .15 * (2 - z) : z > 20.1 ? z + .22 * (z - 20.1) : z;
+            }
+            case 'erb': return 11.17268 * Math.log1p(46.06538 * hz / (hz + 14678.49));
+            case 'period': return -1 / Math.max(1e-12, hz);
+            default: return hz;
+        }
+    }
+    function axisToHz(value, type) {
+        switch (type) {
+            case 'log': return Math.exp(value);
+            case 'mel': return 700 * Math.expm1(value / 1127);
+            case 'bark': {
+                const z = value < 2 ? 2 + (value - 2) / .85 : value > 20.1 ? 20.1 + (value - 20.1) / 1.22 : value;
+                return 1960 * (z + .53) / (26.28 - z);
+            }
+            case 'erb': {
+                const z = Math.expm1(value / 11.17268);
+                return 14678.49 * z / (46.06538 - z);
+            }
+            case 'period': return -1 / value;
+            default: return value;
+        }
+    }
+    function currentScale() { const selected = $('frequencyScale').value; return SCALES.includes(selected) ? selected : 'linear'; }
     function getDisplayFreqRange() {
         const nyquist = app.meta ? app.meta.sampleRate / 2 : 48000;
-        let min = clamp(finite($('displayFreqMin').value, 0), 0, nyquist), max = clamp(finite($('displayFreqMax').value, nyquist), 0, nyquist);
-        if (max <= min) {
-            max = nyquist;
-            min = Math.min(min, Math.max(0, nyquist - Math.max(1, nyquist / 1000)));
-        }
+        const type = currentScale();
+        // Log and period have singularities at 0; match Audacity's 1 Hz floor.
+        // For anomalously low sample rates, keep a strictly positive half-Nyquist floor.
+        const floor = type === 'log' || type === 'period' ? Math.min(1, nyquist / 2) : 0;
+        let min = clamp(finite($('displayFreqMin').value, floor), floor, nyquist);
+        let max = clamp(finite($('displayFreqMax').value, nyquist), floor, nyquist);
+        if (max <= min) { min = floor; max = nyquist; }
         return { min, max };
     }
-    function updateFreqControls() { const f = getDisplayFreqRange(); $('displayFreqMin').value = fmt(f.min); $('displayFreqMax').value = fmt(f.max); $('displayFreqMin').max = $('displayFreqMax').max = app.meta ? app.meta.sampleRate / 2 : 48000; return f; }
+    function scaleFraction(hz, range = getDisplayFreqRange(), type = currentScale()) {
+        const lo = hzToAxis(range.min, type), hi = hzToAxis(range.max, type);
+        // Do not pin off-band markers to the visible edge; let canvas clipping hide them.
+        return (hzToAxis(hz, type) - lo) / (hi - lo);
+    }
+    function fractionHz(fraction, range = getDisplayFreqRange(), type = currentScale()) {
+        const lo = hzToAxis(range.min, type), hi = hzToAxis(range.max, type);
+        return clamp(axisToHz(lo + clamp(fraction, 0, 1) * (hi - lo), type), range.min, range.max);
+    }
+    function updateFreqControls() {
+        const f = getDisplayFreqRange();
+        // Preserve an entered 0 Hz even if Log/Period internally use 1 Hz;
+        // switching back to a zero-capable scale then restores the full band.
+        if (Number($('displayFreqMin').value) !== 0) $('displayFreqMin').value = fmt(f.min);
+        $('displayFreqMax').value = fmt(f.max);
+        $('displayFreqMin').max = $('displayFreqMax').max = app.meta ? app.meta.sampleRate / 2 : 48000;
+        return f;
+    }
     const readyControls = ['channel', 'playPauseBtn', 'stopBtn', 'prevBtn', 'nextBtn', 'gotoBtn', 'scrubSlider', 'zoomIn', 'zoomOut', 'fitBtn', 'panLeft', 'panRight', 'scrollSlider', 'fullBandBtn', 'overviewBtn', 'addPointBtn', 'exportJson', 'exportCsv', 'importBtn'];
     function ready(enabled) {
         for (const id of readyControls)
@@ -1320,7 +1379,9 @@ self.onmessage = async ({ data: m }) => {
         $('dbMin').value = dbMin;
         $('dbMax').value = dbMax;
         try {
-            const result = await app.analysis.call('render', { start: app.start, span: app.span, width: Math.ceil(geometry.w), height: Math.ceil(geometry.h), channel: channel(), fft: Number($('fftSize').value), fmin: f.min, fmax: f.max, dbMin, dbMax, color: $('colorMap').value });
+            const h = clamp(Math.ceil(geometry.h), 64, 512), scale = currentScale();
+            const frequencyEdges = Array.from({ length: h + 1 }, (_, y) => fractionHz(1 - y / h, f, scale));
+            const result = await app.analysis.call('render', { start: app.start, span: app.span, width: Math.ceil(geometry.w), height: h, channel: channel(), fft: Number($('fftSize').value), fmin: f.min, fmax: f.max, scale, frequencyEdges, dbMin, dbMax, color: $('colorMap').value });
             if (result.cancelled || serial !== app.renderSerial || loadEpoch !== app.loadEpoch)
                 return;
             result.image = document.createElement('canvas');
@@ -1371,7 +1432,14 @@ self.onmessage = async ({ data: m }) => {
         return { ctx, g };
     }
     function tX(time, g) { return g.left + (time - app.start) / app.span * g.w; }
-    function fY(f, g) { const band = getDisplayFreqRange(); return g.top + (band.max - f) / (band.max - band.min) * g.h; }
+    function fY(f, g) { return g.top + (1 - scaleFraction(f)) * g.h; }
+    function frequencyTick(hz) {
+        // Period puts many ticks below 10 Hz; labeling all in kHz would show 0.00.
+        if (hz >= 1000) return fmt(hz / 1000, hz >= 10000 ? 1 : 2) + 'k';
+        if (hz >= 100) return fmt(hz, 0);
+        if (hz >= 10) return fmt(hz, 1);
+        return fmt(hz, 2);
+    }
     function drawBase(canvas, isSpec) {
         const { ctx, g } = sizedContext(canvas);
         ctx.clearRect(0, 0, g.width, g.height);
@@ -1385,9 +1453,11 @@ self.onmessage = async ({ data: m }) => {
         if (r && app.meta) {
             const x = tX(r.start, g), w = r.span / app.span * g.w;
             if (isSpec) {
-                const y = fY(r.fmax, g), h = (r.fmax - r.fmin) / (getDisplayFreqRange().max - getDisplayFreqRange().min) * g.h;
-                ctx.imageSmoothingEnabled = false;
-                ctx.drawImage(r.image, x, y, w, h);
+                if (r.scale === currentScale()) {
+                    const y = fY(r.fmax, g), h = fY(r.fmin, g) - y;
+                    ctx.imageSmoothingEnabled = false;
+                    ctx.drawImage(r.image, x, y, w, h);
+                }
             }
             else {
                 const amp = Number($('amplitude').value);
@@ -1426,7 +1496,7 @@ self.onmessage = async ({ data: m }) => {
         const f = getDisplayFreqRange();
         for (let i = 0; i <= 4; i++) {
             const y = g.top + i * g.h / 4;
-            ctx.fillText(isSpec ? fmt((f.max - i / 4 * (f.max - f.min)) / 1000, 2) : fmt((1 - i / 2) / Number($('amplitude').value), 2), g.left - 7, y + 4);
+            ctx.fillText(isSpec ? frequencyTick(fractionHz(1 - i / 4, f)) : fmt((1 - i / 2) / Number($('amplitude').value), 2), g.left - 7, y + 4);
             ctx.beginPath();
             ctx.moveTo(g.left, y);
             ctx.lineTo(g.left + g.w, y);
@@ -1435,7 +1505,7 @@ self.onmessage = async ({ data: m }) => {
             ctx.globalAlpha = 1;
         }
         ctx.textAlign = 'left';
-        ctx.fillText(isSpec ? 'Spectrogram · kHz' : 'Waveform · full scale', 8, 14);
+        ctx.fillText(isSpec ? 'Spectrogram · Hz (k = 1000 Hz)' : 'Waveform · full scale', 8, 14);
         ctx.textAlign = 'right';
         ctx.fillStyle = app.renderPending ? '#ffda86' : '#d8e3ef';
         ctx.fillText(app.renderPending ? 'Updating preview…' : isSpec ? 'Hann · dBFS' : '', g.width - 12, 14);
@@ -1772,7 +1842,7 @@ self.onmessage = async ({ data: m }) => {
     function exportObject() {
         if (!app.meta)
             throw Error('Load audio first.');
-        return { schema: 'audio-annotator-v2', version: 1, meta: { filename: app.file.name, fileSize: app.file.size, lastModified: app.file.lastModified, ...app.meta, nyquist: app.meta.sampleRate / 2, exportedAt: new Date().toISOString() }, view: { start: app.start, span: app.span, channel: channel(), fftSize: Number($('fftSize').value), frequency: getDisplayFreqRange() }, tags: Array.from(app.tags, ([key, value]) => ({ key, ...value })), markers: Array.from(app.markers.values(), m => { const s = styleFor(m); return { ...m, tagName: s.name, color: s.color, alpha: s.alpha }; }) };
+        return { schema: 'audio-annotator-v2', version: 1, meta: { filename: app.file.name, fileSize: app.file.size, lastModified: app.file.lastModified, ...app.meta, nyquist: app.meta.sampleRate / 2, exportedAt: new Date().toISOString() }, view: { start: app.start, span: app.span, channel: channel(), fftSize: Number($('fftSize').value), frequencyScale: currentScale(), frequency: getDisplayFreqRange() }, tags: Array.from(app.tags, ([key, value]) => ({ key, ...value })), markers: Array.from(app.markers.values(), m => { const s = styleFor(m); return { ...m, tagName: s.name, color: s.color, alpha: s.alpha }; }) };
     }
     const csvHeader = ['record_type', 'id', 'type', 'start_seconds', 'end_seconds', 'frequency_hz', 'freq_min_hz', 'freq_max_hz', 'tag', 'tag_name', 'label', 'color', 'alpha', 'created_at', 'metadata_json'];
     const csvCell = value => '"' + String(value ?? '').replaceAll('"', '""') + '"';
@@ -1964,7 +2034,7 @@ self.onmessage = async ({ data: m }) => {
             report(e);
         }
     }
-    function canvasPoint(e, canvas) { const g = geom(canvas), box = canvas.getBoundingClientRect(), x = e.clientX - box.left, y = e.clientY - box.top, inside = x >= g.left && x <= g.left + g.w && y >= g.top && y <= g.top + g.h; const time = clamp(app.start + (x - g.left) / g.w * app.span, 0, app.meta.duration), f = getDisplayFreqRange(), frequency = clamp(f.max - (y - g.top) / g.h * (f.max - f.min), f.min, f.max); return { x, y, time: Math.round(time * app.meta.sampleRate) / app.meta.sampleRate, frequency, inside, g }; }
+    function canvasPoint(e, canvas) { const g = geom(canvas), box = canvas.getBoundingClientRect(), x = e.clientX - box.left, y = e.clientY - box.top, inside = x >= g.left && x <= g.left + g.w && y >= g.top && y <= g.top + g.h; const time = clamp(app.start + (x - g.left) / g.w * app.span, 0, app.meta.duration), frequency = fractionHz(1 - (y - g.top) / g.h); return { x, y, time: Math.round(time * app.meta.sampleRate) / app.meta.sampleRate, frequency, inside, g }; }
     function nearestMarker(p, isSpec) {
         let best = null, distance = 11;
         for (const m of app.markers.values()) {
@@ -2086,9 +2156,15 @@ self.onmessage = async ({ data: m }) => {
             if (e.ctrlKey || e.metaKey)
                 zoom(Math.exp(clamp(delta * .002, -1, 1)), p.time);
             else if (e.altKey) {
-                const f = getDisplayFreqRange(), ny = app.meta.sampleRate / 2, span = clamp((f.max - f.min) * Math.exp(clamp(delta * .002, -1, 1)), Math.max(.001, ny / 1000000), ny), fraction = (p.frequency - f.min) / (f.max - f.min), min = clamp(p.frequency - fraction * span, 0, ny - span);
-                $('displayFreqMin').value = min;
-                $('displayFreqMax').value = min + span;
+                const f = getDisplayFreqRange(), kind = currentScale(), ny = app.meta.sampleRate / 2;
+                const floor = kind === 'log' || kind === 'period' ? Math.min(1, ny / 2) : 0;
+                const totalLo = hzToAxis(floor, kind), totalHi = hzToAxis(ny, kind);
+                const lo = hzToAxis(f.min, kind), hi = hzToAxis(f.max, kind);
+                const anchor = hzToAxis(p.frequency, kind), anchorFraction = (anchor - lo) / (hi - lo);
+                const span = clamp((hi - lo) * Math.exp(clamp(delta * .002, -1, 1)), (totalHi - totalLo) / 1000000, totalHi - totalLo);
+                const nextLo = clamp(anchor - anchorFraction * span, totalLo, totalHi - span);
+                $('displayFreqMin').value = clamp(axisToHz(nextLo, kind), floor, ny);
+                $('displayFreqMax').value = clamp(axisToHz(nextLo + span, kind), floor, ny);
                 requestRender();
             }
             else if (e.shiftKey)
@@ -2151,6 +2227,11 @@ self.onmessage = async ({ data: m }) => {
     handle('fullBandBtn', 'click', () => { $('displayFreqMin').value = 0; $('displayFreqMax').value = app.meta.sampleRate / 2; requestRender(); });
     for (const id of ['fftSize', 'displayFreqMin', 'displayFreqMax', 'dbMin', 'dbMax', 'colorMap'])
         handle(id, 'change', requestRender);
+    handle('frequencyScale', 'change', () => {
+        // Never warp a previously rendered image using a different scale.
+        app.lastRender = null;
+        requestRender();
+    });
     handle('amplitude', 'change', paintAll);
     handle('channel', 'change', async () => {
         const was = app.playing;
@@ -2306,7 +2387,7 @@ self.onmessage = async ({ data: m }) => {
         if (app.meta)
             requestRender();
     }).observe($('wavePlot'));
-    window.AudioAnnotatorV2 = Object.freeze({ inspect: () => ({ meta: app.meta ? { ...app.meta } : null, file: app.file?.name, start: app.start, span: app.span, cursor: app.cursor, playing: app.playing, renderPending: app.renderPending, render: app.lastRender ? { start: app.lastRender.start, span: app.lastRender.span, fmin: app.lastRender.fmin, fmax: app.lastRender.fmax, mode: app.lastRender.mode, fft: app.lastRender.fft, elapsedMs: app.lastRender.elapsedMs } : null, markers: Array.from(app.markers.values(), m => ({ ...m })), tags: Array.from(app.tags, ([key, v]) => ({ key, ...v })), undo: app.undo.length, redo: app.redo.length, selected: app.selected, overview: { ...app.overview }, outputRate: app.context?.sampleRate || null, scheduledNodes: app.nodes.size }), readNativeSamples: (start, count, ch = 0) => app.analysis.call('read', { start, count, channel: ch }).then(a => Array.from(a)), readSpectrum: (time, fft = 4096, ch = 0) => app.analysis.call('spectrum', { time, fft, channel: ch }).then(r => ({ sampleRate: r.sampleRate, db: Array.from(r.db) })), diagnostics: async () => ({ analysis: await app.analysis.call('stats'), playback: await app.playback.call('stats'), historyBytes: app.historyBytes }), audioRMS: () => {
+    window.AudioAnnotatorV2 = Object.freeze({ inspect: () => ({ meta: app.meta ? { ...app.meta } : null, file: app.file?.name, start: app.start, span: app.span, cursor: app.cursor, playing: app.playing, renderPending: app.renderPending, render: app.lastRender ? { start: app.lastRender.start, span: app.lastRender.span, fmin: app.lastRender.fmin, fmax: app.lastRender.fmax, scale: app.lastRender.scale, mode: app.lastRender.mode, fft: app.lastRender.fft, elapsedMs: app.lastRender.elapsedMs } : null, markers: Array.from(app.markers.values(), m => ({ ...m })), tags: Array.from(app.tags, ([key, v]) => ({ key, ...v })), undo: app.undo.length, redo: app.redo.length, selected: app.selected, overview: { ...app.overview }, outputRate: app.context?.sampleRate || null, scheduledNodes: app.nodes.size }), readNativeSamples: (start, count, ch = 0) => app.analysis.call('read', { start, count, channel: ch }).then(a => Array.from(a)), frequencyAxis: () => ({ scale: currentScale(), ...getDisplayFreqRange() }), frequencyPosition: hz => scaleFraction(hz), frequencyAtPosition: position => fractionHz(position), readSpectrum: (time, fft = 4096, ch = 0) => app.analysis.call('spectrum', { time, fft, channel: ch }).then(r => ({ sampleRate: r.sampleRate, db: Array.from(r.db) })), diagnostics: async () => ({ analysis: await app.analysis.call('stats'), playback: await app.playback.call('stats'), historyBytes: app.historyBytes }), audioRMS: () => {
             if (!app.analyser)
                 return 0;
             const a = new Float32Array(app.analyser.fftSize);

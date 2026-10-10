@@ -26,7 +26,7 @@ def main() -> int:
     parser.add_argument('--large', action='store_true', help='Create the 484 MB FLAC, 2.15 GB WAV and 4.8 GB RF64 fixtures; run the extra regressions.')
     parser.add_argument('--inject-html', action='store_true', help='Inject HTML into a real Chromium page instead of navigating file:// (restricted CI only).')
     parser.add_argument('--chromium', type=Path)
-    parser.add_argument('--suite', choices=['all','numeric','interaction','regression'], default='all')
+    parser.add_argument('--suite', choices=['all','numeric','interaction','frequency_scale','regression'], default='all')
     args = parser.parse_args()
     root, fixtures = args.root.resolve(), args.fixture_dir.expanduser().resolve()
     for p in [root/'audio_annotatorv2.html', root/'sample/251006_001_0002.WAV', *args.audio]:
@@ -38,7 +38,7 @@ def main() -> int:
     env = dict(os.environ, AUDIO_V2_ROOT=str(root), AUDIO_V2_FIXTURES=str(fixtures), AUDIO_V2_REPORTS=str(fixtures/'reports'), AUDIO_V2_FILES=json.dumps([str(p.expanduser().resolve()) for p in args.audio]), AUDIO_V2_INJECT='1' if args.inject_html else '0')
     if args.chromium:
         env['AUDIO_V2_CHROMIUM'] = str(args.chromium)
-    suites = ['numeric','interaction'] + (['regression'] if args.large else []) if args.suite == 'all' else [args.suite]
+    suites = ['numeric', 'interaction', 'frequency_scale'] + (['regression'] if args.large else []) if args.suite == 'all' else [args.suite]
     codes = []
     for suite in suites:
         result = subprocess.run([sys.executable, str(Path(__file__).with_name(suite+'_test.py'))], env=env, check=False)
