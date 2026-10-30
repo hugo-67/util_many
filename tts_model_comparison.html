@@ -1,14 +1,18 @@
 <!doctype html>
 <!--
 Programmer Reference Summary — Browser TTS Model Comparison
-Purpose: compare six TTS backends on the actual browser/device, independently of
+Purpose: compare seven TTS backends on the actual browser/device, independently of
 Codex and without server-side inference. One root HTML utility, no build step.
 Do NOT edit README.md (util_many auto-generates it from root HTML files).
 Backends are selected lazily; model files and runtime modules are not fetched
 until selected. A successful selection speaks its own model name. Browser TTS
 uses speechSynthesis. Kitten uses the upstream plain-HTML UMD SDK with
-nano-int8, Kokoro uses kokoro-js q8/WASM, Piper uses the Mintplex browser SDK,
-and Pocket 18M uses the MIT-licensed tablefolk ONNX/WASM worker loaded at runtime.
+nano-int8, Kokoro uses kokoro-js quantized ONNX, Piper uses a pinned ONNX/WASM runtime,
+and Pocket 18M uses a vendored MIT-licensed tablefolk ONNX/WASM worker.
+Spellophone adds a small, reliable espeak-ng WASM compatibility engine.
+Voice selection announces the selected voice, and changing backends still
+announces the engine name. Generation is chunked where supported, and timeouts
+report stalled model runtimes without misleading backend fallbacks.
 Pocket 7M has official weights but no verified compatible public browser ONNX
 bundle at authoring time. It is *not* silently routed to the 18M model: a user
 may supply a compatible Pocket ONNX bundle directory URL (same bundle schema).
@@ -18,6 +22,8 @@ by CSP, mobile memory limits, or remote CORS. Cache managed by each upstream
 runtime. Test via GitHub Pages HTTPS or a local static server (not file://).
 Playback: speechSynthesis pause/resume or HTMLAudioElement for finished WAV;
 Pocket streams PCM through AudioContext scheduled nodes (pause = suspend).
+Pocket worker is a same-origin helper to avoid cross-origin module-worker CORS.
+All SDK imports and models remain lazy; seven backends are independent.
 Changing models/Stop prevents stale synthesis from playing. Unknown model errors
 are surfaced, never substituted by a different engine. Dynamic text is never
 inserted through innerHTML. Browser autoplay restrictions may require Play tap.
@@ -27,9 +33,9 @@ Source references and reproduction notes appear in the About panel.
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Compare six entirely client-side text-to-speech backends on smartphones and desktop: Pocket TTS 7M and 18M, KittenTTS Nano, Kokoro-82M, Piper, and native browser speech. Lazy model downloads, customizable voices, play/pause, latency benchmarks, browser diagnostics and WAV export in one standalone HTML utility.">
-<meta name="keywords" content="text-to-speech, TTS benchmark, Pocket TTS 7M, Pocket TTS 18M, KittenTTS Nano, Kokoro 82M, Piper TTS, browser TTS, WebAssembly, ONNX, mobile speech, offline inference">
-<title>Browser TTS Model Comparison — 6 Engines</title>
+<meta name="description" content="Compare six entirely client-side text-to-speech backends on smartphones and desktop: Pocket TTS 7M and 18M, KittenTTS Nano, Kokoro-82M, Piper, Spellophone eSpeak NG, and native browser speech. Lazy model downloads, customizable voices, play/pause, latency benchmarks, browser diagnostics and WAV export in one standalone HTML utility.">
+<meta name="keywords" content="text-to-speech, TTS benchmark, Pocket TTS 7M, Pocket TTS 18M, KittenTTS Nano, Kokoro 82M, Piper TTS, eSpeak NG, Spellophone, browser TTS, WebAssembly, ONNX, mobile speech, offline inference">
+<title>Browser TTS Model Comparison — 7 Engines</title>
 <style>
 :root{color-scheme:light;--bg:#f6f7fb;--card:#fff;--ink:#14223b;--muted:#52627a;--line:#dae1ec;--accent:#245dc4;--good:#137b52;--warn:#905a06;--bad:#b12b3c;--surface:#eef4ff}
 *{box-sizing:border-box}body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink);margin:0;line-height:1.5;font-size:15px}main{max-width:1040px;padding:24px 20px 65px;margin:auto}h1{font-size:clamp(25px,4vw,36px);letter-spacing:-.035em;line-height:1.15;margin:0 0 10px}h2{font-size:18px;margin:0 0 12px}p{margin:8px 0}header{margin-bottom:20px}.subtitle{color:var(--muted);max-width:730px}.grid{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(260px,.8fr);gap:16px}.card{background:var(--card);border:1px solid var(--line);padding:19px;border-radius:15px;box-shadow:0 2px 8px #15223b09}.card+.card{margin-top:16px}.grid .card+.card{margin-top:0}label{display:block;font-weight:600;font-size:13px;margin-bottom:7px}input,select,textarea,button{font:inherit}select,textarea,input[type=url]{background:white;color:var(--ink);width:100%;border:1px solid #b8c5d6;border-radius:9px;padding:10px 12px;min-width:0}select:focus-visible,textarea:focus-visible,input:focus-visible,button:focus-visible{outline:3px solid #91b8fa;outline-offset:1px}textarea{min-height:155px;resize:vertical;line-height:1.55}button{padding:9px 14px;border-radius:9px;border:1px solid #b9c6d9;color:var(--ink);background:#fff;cursor:pointer;font-weight:600}button:hover:not(:disabled){background:#edf3fb}button:disabled{opacity:.5;cursor:not-allowed}button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}button.primary:hover:not(:disabled){background:#164eaf}button.danger{border-color:#e4bbc2;color:var(--bad)}.field{margin-bottom:17px}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.row.tight{gap:7px}.row>button{flex-shrink:0}.selectpair{display:grid;grid-template-columns:1fr 1fr;gap:12px}.subtle{color:var(--muted);font-size:13px}.small{font-size:12px;color:var(--muted)}.pill{display:inline-flex;gap:6px;align-items:center;border-radius:999px;background:#e8edf6;padding:4px 9px;color:#425775;font-size:12px;font-weight:650}.pill.good{color:var(--good);background:#d9f5e8}.pill.warn{color:var(--warn);background:#fff1d5}.pill.bad{color:var(--bad);background:#ffe1e7}.controls{display:flex;flex-wrap:wrap;gap:8px;margin:15px 0 9px}.controls button{min-width:82px}.metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.metric{background:#f3f6fa;border:1px solid #e2e8f0;padding:10px;border-radius:10px}.metric dt{font-size:12px;color:var(--muted)}.metric dd{font-size:19px;font-weight:750;margin:2px 0 0;font-variant-numeric:tabular-nums}.signal{padding:11px 13px;border-radius:10px;background:var(--surface);color:#214374;border:1px solid #d0e3ff;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}.signal.warn{background:#fff7e4;color:#825311;border-color:#f1d9a5}.signal.bad{background:#fff0f1;color:#9b2034;border-color:#ffd2d8}progress{width:100%;height:10px;accent-color:var(--accent);margin-top:10px}.hint{border-left:3px solid #bac8db;padding:5px 0 5px 11px;margin-top:12px;color:var(--muted);font-size:12px}.info-list{font-size:13px;margin:0;padding-left:19px}.info-list li{margin:7px 0}.log{font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;background:#0e1d32;color:#d5e8ff;border-radius:10px;padding:12px;max-height:220px;overflow:auto;margin-top:10px}details{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}summary{cursor:pointer;font-weight:650;color:#2b4a81}a{color:var(--accent)}input[type=range]{width:130px;accent-color:var(--accent)}.rate-label{font-size:12px;color:var(--muted)}.advanced{padding:13px;border:1px solid #ecd5aa;border-radius:10px;background:#fffaf0;margin-top:11px}.advanced label{margin-top:7px}.split-note{border-top:1px solid var(--line);padding-top:12px;margin-top:12px}.status-grid{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:9px}.voicebox{min-height:38px}@media(max-width:760px){main{padding:18px 13px 40px}.grid{grid-template-columns:1fr}.grid .card+.card{margin-top:16px}.selectpair{grid-template-columns:1fr}.card{padding:15px}.controls button{flex:1}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.metric dd{font-size:16px}}
@@ -39,13 +45,13 @@ Source references and reproduction notes appear in the About panel.
 <main>
 <header>
 <h1>Browser TTS Model Comparison</h1>
-<p class="subtitle">Six engines, one test page. Model inference runs on <strong>this device</strong>, not the server. Select an engine to fetch only its assets and hear it announce its name. Test voice quality, mobile memory limits, load time and playback controls.</p>
+<p class="subtitle">Seven engines, one test page. Model inference runs on <strong>this device</strong>, not the server. Select an engine to fetch only its assets and hear it announce its name. Test voice quality, mobile memory limits, load time and playback controls.</p>
 </header>
 <div class="grid">
 <section aria-label="TTS controls">
 <div class="card">
 <h2>1. Choose an engine</h2>
-<div class="field"><label for="engine">Text-to-speech backend</label><select id="engine"><option value="">Choose a model (nothing downloads yet)</option><option value="browser">Browser native TTS — baseline</option><option value="kitten">KittenTTS Nano int8 — 15M (~25 MB)</option><option value="pocket7">Pocket TTS 7M — experimental, needs ONNX export URL</option><option value="pocket18">Pocket TTS 18M — ONNX/WASM (~40 MB initial)</option><option value="kokoro">Kokoro-82M — q8/WASM (~90 MB)</option><option value="piper">Piper TTS — per-voice ONNX (~60 MB)</option></select></div>
+<div class="field"><label for="engine">Text-to-speech backend</label><select id="engine"><option value="">Choose a model (nothing downloads yet)</option><option value="browser">Browser native TTS — baseline</option><option value="kitten">KittenTTS Nano int8 — 15M (~25 MB)</option><option value="pocket7">Pocket TTS 7M — experimental, needs ONNX export URL</option><option value="pocket18">Pocket TTS 18M — ONNX/WASM (~40 MB initial)</option><option value="kokoro">Kokoro-82M — q8/WASM (~90 MB)</option><option value="piper">Piper TTS — per-voice ONNX (~60 MB)</option><option value="espeak">Spellophone (eSpeak NG WASM) — compact &amp; robust</option></select></div>
 <div class="status-grid"><span class="pill" id="badge">Not loaded</span><span class="small" id="engineNote">No engine assets have been requested.</span></div>
 <div class="signal" id="status" role="status" aria-live="polite">Select an engine to begin.</div>
 <progress id="progress" max="100" value="0" hidden aria-label="Model download progress"></progress>
@@ -63,7 +69,7 @@ Source references and reproduction notes appear in the About panel.
 <textarea id="text" spellcheck="true">Hello! This is a test of natural speech from a browser-based text-to-speech engine. The quick brown fox jumps over the lazy dog. Today is October 30th, 2026. How does it handle numbers like 123.45, abbreviations like AI and GPU, and punctuation? Finally, can it speak longer paragraphs smoothly on a normal smartphone?</textarea>
 <div class="row tight" style="margin-top:7px"><button type="button" id="resetText">Restore sample text</button><span class="small" id="chars">0 characters</span></div>
 <div class="controls"><button id="play" type="button" class="primary" disabled>▶ Play</button><button id="pause" type="button" disabled>⏸ Pause</button><button id="resume" type="button" disabled>⏵ Resume</button><button id="stop" type="button" class="danger" disabled>■ Stop</button><button id="download" type="button" disabled>↓ WAV</button></div>
-<p class="small">Selecting a successfully loaded model automatically speaks its name once. Play uses the text above. Pause/resume controls already-generated playback; inference may continue if the model does not support cancellation.</p>
+<p class="small">Selecting a successfully loaded model automatically speaks its name once; changing voices also speaks the new voice name. Play uses the text above. Pause/resume controls already-generated playback; inference may continue if the model does not support cancellation.</p>
 </div>
 </section>
 <aside aria-label="Diagnostics and help">
@@ -76,11 +82,11 @@ Source references and reproduction notes appear in the About panel.
 </div>
 <div class="card">
 <h2>What is being compared?</h2>
-<ul class="info-list"><li><strong>Browser:</strong> built-in OS/browser voice; may itself use a remote service.</li><li><strong>Kitten:</strong> 15M-parameter Nano int8, ONNX Runtime Web, browser cache.</li><li><strong>Pocket 18M:</strong> independently maintained ONNX worker using WASM, streaming PCM.</li><li><strong>Pocket 7M:</strong> intentionally marked experimental until a compatible export is supplied. No fake fallback.</li><li><strong>Kokoro:</strong> 82M model, quantized q8, local WASM inference.</li><li><strong>Piper:</strong> VITS model downloaded separately per selected voice.</li></ul>
+<ul class="info-list"><li><strong>Browser:</strong> built-in OS/browser voice; may itself use a remote service.</li><li><strong>Kitten:</strong> 15M-parameter Nano int8, ONNX Runtime Web, browser cache.</li><li><strong>Pocket 18M:</strong> independently maintained ONNX worker using WASM, streaming PCM.</li><li><strong>Pocket 7M:</strong> intentionally marked experimental until a compatible export is supplied. No fake fallback.</li><li><strong>Kokoro:</strong> 82M model, quantized q8, local WASM inference.</li><li><strong>Piper:</strong> VITS model downloaded separately per selected voice.</li><li><strong>Spellophone:</strong> eSpeak NG through WASM, very compact and robust, but more robotic than neural voices.</li></ul>
 <details><summary>Dependencies, attribution & limitations</summary>
 <p class="small">All synthesis for the five neural engines is client-side, using on-demand code and model downloads. The web page itself has no backend, npm, build step or bundled weights. Browser TTS may be cloud-backed depending on voice. Hugging Face or CDN failures, COOP/COEP/thread restrictions, unsupported WebAssembly/WebGPU, memory pressure and browser autoplay policies can prevent execution, especially on iOS. Keep this tab foregrounded during heavy synthesis.</p>
-<p class="small"><a href="https://github.com/KittenML/KittenTTS-web" target="_blank" rel="noopener noreferrer">Kitten SDK (Apache-2.0)</a>; <a href="https://github.com/hexgrad/kokoro" target="_blank" rel="noopener noreferrer">Kokoro</a>; <a href="https://github.com/Mintplex-Labs/piper-tts-web" target="_blank" rel="noopener noreferrer">Piper browser SDK</a>; <a href="https://github.com/runvnc/tablefolk/blob/main/app/tts/pocket18-worker.js" target="_blank" rel="noopener noreferrer">Pocket 18M browser worker (MIT, Copyright © 2026 Jason)</a>; <a href="https://huggingface.co/maxime/pocket-tts-18m-onnx" target="_blank" rel="noopener noreferrer">Pocket 18M ONNX assets</a>; <a href="https://github.com/kyutai-labs/pocket-tts" target="_blank" rel="noopener noreferrer">Pocket upstream</a>.</p>
-<p class="small">Pocket 18M's MIT-licensed worker is fetched from upstream rather than copied into this file; attribution is shown above. It depends on ONNX Runtime Web and a SentencePiece module from external CDNs. Loading a custom 7M model URL trusts that origin; only use exports from sources you trust.</p>
+<p class="small"><a href="https://github.com/KittenML/KittenTTS-web" target="_blank" rel="noopener noreferrer">Kitten SDK (Apache-2.0)</a>; <a href="https://github.com/hexgrad/kokoro" target="_blank" rel="noopener noreferrer">Kokoro</a>; <a href="https://github.com/Mintplex-Labs/piper-tts-web" target="_blank" rel="noopener noreferrer">Piper browser SDK</a>; <a href="https://github.com/runvnc/tablefolk/blob/main/app/tts/pocket18-worker.js" target="_blank" rel="noopener noreferrer">Pocket 18M browser worker (MIT, Copyright © 2026 Jason)</a>; <a href="https://huggingface.co/maxime/pocket-tts-18m-onnx" target="_blank" rel="noopener noreferrer">Pocket 18M ONNX assets</a>; <a href="https://github.com/Spelling-Creator/spellophone" target="_blank" rel="noopener noreferrer">Spellophone (GPL-3.0-or-later)</a>; <a href="https://github.com/kyutai-labs/pocket-tts" target="_blank" rel="noopener noreferrer">Pocket upstream</a>.</p>
+<p class="small">Pocket 18M's MIT-licensed worker is included as a same-origin helper (<code>tts_pocket18_worker.js</code>); attribution is shown above. It depends on ONNX Runtime Web and a SentencePiece module from external CDNs. Loading a custom 7M model URL trusts that origin; only use exports from sources you trust.</p>
 </details>
 </div>
 </aside>
@@ -90,12 +96,13 @@ Source references and reproduction notes appear in the About panel.
 'use strict';
 const $ = id => document.getElementById(id);
 const KITTEN_JS='https://cdn.jsdelivr.net/gh/KittenML/KittenTTS-web@c846fe92858f3447f4912226471f5a63983b3f94/examples/html/assets/kittentts-web.js';
-const POCKET_WORKER_JS='https://cdn.jsdelivr.net/gh/runvnc/tablefolk@4dc2b5d881852a2c03aff025098e5cb6c833e2bf/app/tts/pocket18-worker.js';
+const POCKET_WORKER_JS='./tts_pocket18_worker.js';
 const KOKORO_JS='https://esm.sh/kokoro-js@1.2.1?bundle';
-const PIPER_JS='https://esm.sh/@mintplex-labs/piper-tts-web@1.0.3?bundle';
+const PIPER_JS='https://esm.sh/@mintplex-labs/piper-tts-web@1.0.3?bundle&deps=onnxruntime-web@1.18.0';
+const ESPEAK_JS='https://cdn.jsdelivr.net/npm/@spelling-creator/spellophone@0.2.1/dist/browser.js';
 const SAMPLE=$('text').value;
-const LABELS={browser:'Browser native TTS',kitten:'KittenTTS Nano',pocket7:'Pocket TTS 7 M',pocket18:'Pocket TTS 18 M',kokoro:'Kokoro 82 M',piper:'Piper TTS'};
-const session={version:0,id:'',backend:null,busy:false,loading:false,speaking:false,paused:false,stopId:0,generated:null,objectUrl:null,pocketEnd:false,autoPending:false,gestureUnblock:null};
+const LABELS={browser:'Browser native TTS',kitten:'KittenTTS Nano',pocket7:'Pocket TTS 7 M',pocket18:'Pocket TTS 18 M',kokoro:'Kokoro 82 M',piper:'Piper TTS',espeak:'Spellophone eSpeak NG'};
+const session={version:0,id:'',backend:null,busy:false,loading:false,speaking:false,paused:false,stopId:0,generated:null,objectUrl:null,pocketEnd:false,autoPending:false,gestureUnblock:null,voiceRevision:0};
 const logLines=[];
 let audioEl=new Audio();audioEl.preload='auto';let audioFinish=null;
 let audioCtx=null;
@@ -114,6 +121,7 @@ function updateControls(){const ready=Boolean(session.backend&&!session.loading)
 function assignVoices(voices,defaultValue){const s=$('voice');s.replaceChildren();for(const v of voices){const id=typeof v==='string'?v:v.id;const title=typeof v==='string'?v:(v.name||v.id);if(!id)continue;s.append(new Option(title,id))}if(!s.options.length)s.append(new Option('No voices found',''));if(defaultValue&&[...s.options].some(x=>x.value===defaultValue))s.value=defaultValue;updateControls()}
 function getVoice(){return $('voice').value}
 function speed(){return Number($('speed').value)||1}
+function withDeadline(promise,ms,label){let timer;return Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error(label+' exceeded '+Math.round(ms/1000)+' seconds; try a shorter passage or another runtime')),ms)})]).finally(()=>clearTimeout(timer))}
 function checkCurrent(v){if(v!==session.version)throw new Error('Model selection changed')}
 async function loadScript(url){return new Promise((resolve,reject)=>{const sc=document.createElement('script');sc.src=url;sc.async=true;sc.onload=resolve;sc.onerror=()=>reject(new Error('Could not load browser SDK: '+url));document.head.append(sc)})}
 function fileBlob(input){if(input instanceof Blob)return input;if(input instanceof Uint8Array||input instanceof ArrayBuffer)return new Blob([input],{type:'audio/wav'});if(ArrayBuffer.isView(input))return new Blob([input],{type:'audio/wav'});throw new Error('TTS runtime did not return a WAV blob')}
@@ -127,23 +135,95 @@ function emptyAudio(){setGenerated(null);clearMetrics()}
 async function resetEngine(){stopPlayback();const old=session.backend;session.backend=null;session.loading=false;session.autoPending=false;emptyAudio();assignVoices([],null);if(old?.dispose)try{await old.dispose()}catch(e){log('Release: '+e.message)}}
 async function initBrowser(){if(!('speechSynthesis' in window))throw Error('SpeechSynthesis is not available');const update=()=>{if(session.id!=='browser')return;const voices=speechSynthesis.getVoices();assignVoices(voices.map(v=>({id:v.voiceURI,name:v.name+' · '+v.lang+(v.localService?' · local':' · possibly remote')})),voices.find(v=>v.lang.startsWith('en'))?.voiceURI);};update();speechSynthesis.addEventListener?.('voiceschanged',update);return {kind:'browser',async generate(text){return {nativeText:text}},dispose(){speechSynthesis.cancel()}}}
 async function initKitten(){if(!window.KittenTTSWeb)await loadScript(KITTEN_JS);const {KittenTTS}=window.KittenTTSWeb||{};if(!KittenTTS)throw Error('Kitten browser SDK not available');const engine=await KittenTTS.create({model:'nano-int8',defaultVoice:'bella',analytics:false},(p,info)=>setProgress((p||0)*100,info?.asset||info?.stage||'Loading Kitten assets'));assignVoices(['bella','jasper','luna','bruno','rosie','hugo','kiki','leo'],'bella');return {kind:'wav',async generate(text,voice){const x=await engine.generate(text,{voice,speed:speed()});return fileBlob(x.wavData())},dispose:()=>engine.dispose()}}
-async function initKokoro(){const {KokoroTTS}=await import(KOKORO_JS);if(!KokoroTTS)throw Error('Kokoro module missing KokoroTTS');const tts=await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX',{dtype:'q8',device:'wasm',progress_callback:p=>{if(p?.status==='progress'&&p.total)setProgress(100*p.loaded/p.total,p.file||'Downloading Kokoro');else if(p?.status)status('Kokoro: '+p.status)}});const voices=tts.list_voices();const entries=Array.isArray(voices)?voices.map(v=>typeof v==='string'?v:(v.id||v.name)):Object.keys(voices||{});assignVoices(entries.length?entries:['af_heart','af_bella','af_sky','am_adam','bm_george'],'af_heart');return {kind:'wav',async generate(text,voice){const a=await tts.generate(text,{voice,speed:speed()});if(typeof a.toBlob==='function')return a.toBlob();if(a.audio&&a.sampling_rate)return wav(a.audio,a.sampling_rate);throw Error('Kokoro returned unsupported audio format')},dispose:async()=>{if(tts.dispose)await tts.dispose()}}}
-async function initPiper(){const tts=await import(PIPER_JS);if(typeof tts.download!=='function'||typeof tts.predict!=='function')throw Error('Piper browser module did not provide download/predict');let voice='en_US-hfc_female-medium';let list=[voice,'en_US-lessac-medium','en_US-amy-medium'];try{const catalog=await tts.voices();if(catalog){const keys=Object.keys(catalog).filter(k=>k.startsWith('en_'));if(keys.length)list=keys.sort()}}catch(e){log('Piper voice index unavailable, using known voice IDs: '+e.message)}assignVoices(list,voice);const downloaded=new Set();async function ensureVoice(v){if(downloaded.has(v))return;status('Downloading Piper voice '+v);await tts.download(v,p=>{const frac=p?.total>0?100*p.loaded/p.total:null;setProgress(frac,p?.url?'Piper: '+p.url:'Downloading Piper voice')});downloaded.add(v)}await ensureVoice(voice);return {kind:'wav',async generate(text,v){await ensureVoice(v);return fileBlob(await tts.predict({text,voiceId:v}))},async setVoice(v){await ensureVoice(v)},dispose:()=>{}}}
+async function initKokoro(){
+ const {KokoroTTS}=await import(KOKORO_JS);
+ if(!KokoroTTS)throw Error('Kokoro runtime did not expose KokoroTTS');
+ // Q4 keeps peak memory much lower than q8 on mobile. WebGPU may be faster
+ // on supported phones; WASM is the fallback when it is not available.
+ const attempts=navigator.gpu?[{device:'webgpu',dtype:'q4'},{device:'wasm',dtype:'q8'}]:[{device:'wasm',dtype:'q4'},{device:'wasm',dtype:'q8'}];
+ let tts,device='wasm',lastError;
+ for(const attempt of attempts){
+  try{
+   device=attempt.device;status(`Kokoro: loading ${attempt.dtype} model (${device})`);
+   tts=await withDeadline(KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX',{
+    dtype:attempt.dtype,device,progress_callback:p=>{
+     if(p?.status==='progress'&&p.total)setProgress(100*p.loaded/p.total,p.file||'Kokoro model');
+     else if(p?.status&&p.status!=='progress')log('Kokoro: '+p.status+' '+(p.file||''));
+    }
+   }),180000,'Kokoro model initialization');
+   break;
+  }catch(e){lastError=e;log(`Kokoro ${attempt.dtype}/${device} failed: ${e.message}`)}
+ }
+ if(!tts)throw lastError||Error('No Kokoro ONNX backend initialized');
+ const voices=typeof tts.list_voices==='function'?tts.list_voices():tts.voices;
+ const entries=Array.isArray(voices)?voices.map(v=>typeof v==='string'?v:(v.id||v.name)):Object.keys(voices||{});
+ assignVoices(entries.length?entries:['af_heart','af_bella','af_sky','am_adam','bm_george'],'af_heart');
+ return {kind:'wav',async generate(text,voice){
+  // Long text fed in one call can hang on low-memory browser WASM. Generate
+  // manageable phrases and concatenate PCM at the authoritative sample rate.
+  const pieces=text.match(/[^.!?\n]+[.!?\n]*|[^.!?\n]+$/g)?.map(x=>x.trim()).filter(Boolean)||[text];
+  const chunks=[];for(let p of pieces){while(p.length>155){let at=p.lastIndexOf(' ',155);if(at<45)at=155;chunks.push(p.slice(0,at).trim());p=p.slice(at).trim()}if(p)chunks.push(p)}
+  const pcm=[];let rate=null;
+  for(let i=0;i<chunks.length;i++){
+   status(`Kokoro: generating segment ${i+1}/${chunks.length} (${device})`);
+   // Reject rather than leaving the UI indefinitely at "Synthesizing".
+   const a=await withDeadline(tts.generate(chunks[i],{voice,speed:speed()}),90000,'Kokoro segment '+(i+1));
+   if(a?.audio&&a?.sampling_rate){if(rate&&rate!==a.sampling_rate)throw Error('Kokoro changed sample rate between segments');rate=a.sampling_rate;pcm.push(a.audio)}
+   else if(typeof a?.toBlob==='function'&&chunks.length===1)return a.toBlob();
+   else throw Error('Kokoro returned an unknown audio representation');
+  }
+  return wav(joinPCM(pcm.map(x=>x instanceof Float32Array?x:new Float32Array(x))),rate);
+ },dispose:async()=>{await tts.dispose?.()}};
+}
+async function initPiper(){
+ const tts=await import(PIPER_JS);
+ if(typeof tts.TtsSession!=='function')throw Error('Piper package does not expose TtsSession');
+ const wasmPaths={
+  // The former esm.sh bundle resolved ONNX Runtime to a newer version but
+  // downloaded 1.18.0 WASM from cdnjs. Incompatible binaries fail initWasm.
+  onnxWasm:'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/',
+  piperData:'https://cdn.jsdelivr.net/npm/@diffusionstudio/piper-wasm@1.0.0/build/piper_phonemize.data',
+  piperWasm:'https://cdn.jsdelivr.net/npm/@diffusionstudio/piper-wasm@1.0.0/build/piper_phonemize.wasm',
+ };
+ let list=['en_US-hfc_female-medium','en_US-lessac-medium','en_US-amy-low'];
+ try {const catalog=await tts.voices();const ids=Array.isArray(catalog)?catalog.map(x=>x.key):Object.keys(catalog||{});
+  const english=ids.filter(x=>typeof x==='string'&&x.startsWith('en_'));
+  if(english.length)list=english;
+ }catch(e){log('Piper voices catalog fallback: '+e.message)}
+ assignVoices(list,list[0]);
+ let loadedVoice=null,active=null;
+ async function prepare(v){
+  if(loadedVoice===v&&active)return active;
+  status('Preparing Piper: '+v);
+  // The upstream SDK caches TtsSession globally even when voiceId changes,
+  // which reuses the WRONG model. Force a fresh instance for each voice.
+  tts.TtsSession._instance=null;
+  const next=new tts.TtsSession({voiceId:v,wasmPaths,logger:msg=>log('Piper: '+msg),
+    progress:prog=>setProgress(prog?.total?100*prog.loaded/prog.total:null,'Downloading Piper '+v)});
+  await withDeadline(Promise.resolve(next.waitReady),180000,'Piper voice '+v+' initialization');
+  loadedVoice=v;active=next;return next;
+ }
+ await prepare(list[0]);
+ return {kind:'wav',async generate(text,v){const model=await prepare(v);return fileBlob(await withDeadline(model.predict(text),90000,'Piper speech generation'))},
+  async setVoice(v){await prepare(v)},dispose:()=>{tts.TtsSession._instance=null;active=null}};
+}
+async function initEspeak(){
+ const {createEspeak,encodeWav}=await import(ESPEAK_JS);
+ if(!createEspeak||!encodeWav)throw Error('Spellophone browser SDK did not load');
+ const engine=await withDeadline(createEspeak({cdn:'jsdelivr'}),45000,'Spellophone initialization');
+ // Only preload English; other languages fetched when user selects a voice.
+ const voices=engine.listVoices().map(x=>({id:x.languages?.[0]?.name||x.name,name:x.name+' ('+(x.languages?.[0]?.name||'')+')'}));
+ assignVoices(voices,'en-us');engine.setVoice('en-us');
+ return {kind:'wav',async generate(text,voice){await engine.loadVoice(voice);const result=engine.synthesize(text,{voice,rate:Math.round(175*speed())});return new Blob([encodeWav(result.samples,result.sampleRate)],{type:'audio/wav'})},
+  async setVoice(v){await engine.loadVoice(v);engine.setVoice(v)},dispose:()=>{}};
+}
 const BUILTIN_POCKET_VOICES=['alba','azelma','cosette','eponine','fantine','javert','jean','marius'];
 async function initPocket(type,base){
-  const upstream=await fetch(POCKET_WORKER_JS,{cache:'force-cache'});
-  if(!upstream.ok)throw Error('Pocket worker download failed: HTTP '+upstream.status);
-  let source=await upstream.text();
-  if(type==='pocket7'){
-    const match=source.match(/const BASE\s*=\s*"[^"]+"\s*;/);
-    if(!match)throw Error('Pocket browser worker no longer has a configurable model base');
-    source=source.replace(match[0],'const BASE = '+JSON.stringify(base)+';');
-  }
-  const workerUrl=URL.createObjectURL(new Blob([source],{type:'text/javascript'}));
-  let worker;try{worker=new Worker(workerUrl,{type:'module'})}catch(e){URL.revokeObjectURL(workerUrl);throw e}
-  URL.revokeObjectURL(workerUrl);
+  // Same-origin module worker fixes browser cross-origin script restrictions;
+  // a remote Worker(url) and dynamic import of foreign modules can be denied.
+  const worker=new Worker(POCKET_WORKER_JS,{type:'module'});
   const backend={kind:'pocket',worker,voices:BUILTIN_POCKET_VOICES,loadResolve:null,loadReject:null,generateResolve:null,generateReject:null,setVoiceResolve:null,setVoiceReject:null,disposed:false,metrics:null,rate:24000};
-  let settleTimer=0;
+
   const fail=e=>{const err=new Error(typeof e==='string'?e:(e?.message||'Pocket inference failed'));if(backend.loadReject){backend.loadReject(err);backend.loadReject=null}if(backend.generateReject){backend.generateReject(err);backend.generateReject=null}if(backend.setVoiceReject){backend.setVoiceReject(err);backend.setVoiceReject=null}status(err.message,'bad')};
   worker.onerror=e=>fail('Pocket worker error: '+(e.message||'unknown'));
   worker.onmessage=e=>{const m=e.data||{};switch(m.type){
@@ -159,17 +239,17 @@ async function initPocket(type,base){
     case 'stream_ended':if(backend.generateResolve){backend.generateResolve({kind:'stream',metrics:backend.metrics});backend.generateResolve=null}break;
     case 'error':fail('Pocket error: '+(m.error||m.message||'unknown'));break;
   }};
-  backend.load=()=>new Promise((resolve,reject)=>{backend.loadResolve=resolve;backend.loadReject=reject;worker.postMessage({type:'load',data:{language:'english_18m_refl_2026-10'}})});
+  backend.load=()=>new Promise((resolve,reject)=>{backend.loadResolve=resolve;backend.loadReject=reject;worker.postMessage({type:'load',data:{language:type==='pocket7'?'english_7m_refl_2026-10':'english_18m_refl_2026-10',modelBase:base||null}})});
   backend.setVoice=v=>new Promise((resolve,reject)=>{backend.setVoiceResolve=resolve;backend.setVoiceReject=reject;worker.postMessage({type:'set_voice',data:{voiceName:v}})});
   backend.generate=(text,voice)=>new Promise((resolve,reject)=>{backend.generateResolve=resolve;backend.generateReject=reject;worker.postMessage({type:'generate',data:{text,voice}})});
   backend.stop=()=>{try{worker.postMessage({type:'stop'})}catch{};if(backend.generateReject){backend.generateReject(new Error('Generation stopped'));backend.generateReject=null}};
   backend.dispose=()=>{backend.disposed=true;backend.stop();worker.terminate();backend.loadReject?.(new Error('Model changed'));backend.setVoiceReject?.(new Error('Model changed'))};
   // Install backend before `load()` so its progress and voice messages are visible.
   session.backend=backend;
-  await backend.load();
+  await withDeadline(backend.load(),180000,'Pocket ONNX model initialization');
   return backend;
 }
-async function buildBackend(id){if(id==='browser')return initBrowser();if(id==='kitten')return initKitten();if(id==='kokoro')return initKokoro();if(id==='piper')return initPiper();if(id==='pocket18')return initPocket(id);if(id==='pocket7'){
+async function buildBackend(id){if(id==='browser')return initBrowser();if(id==='kitten')return initKitten();if(id==='kokoro')return initKokoro();if(id==='piper')return initPiper();if(id==='espeak')return initEspeak();if(id==='pocket18')return initPocket(id);if(id==='pocket7'){
  const value=$('pocket7Base').value.trim();if(!value)throw Error('Pocket 7M has no confirmed compatible browser ONNX export. Supply an export URL below to test the real 7M weights.');
  const url=new URL(value);if(url.protocol!=='https:'||url.username||url.password||!url.pathname.endsWith('/'))throw Error('Provide a trusted HTTPS model directory URL ending in /');
  if(!/7m/i.test(url.href))throw Error('The Pocket 7M URL must identify a 7M export (to prevent accidentally playing 18M).');
@@ -220,7 +300,7 @@ async function speakText(text,announce=false){
  }catch(err){if(call!==session.stopId||version!==session.version)return;if(err.message==='Generation stopped'||err.message==='Model selection changed')return;session.speaking=false;session.paused=false;session.busy=false;status(err.message,'bad');log('Error stack: '+(err.stack||err))}
  finally{if(version===session.version&&call===session.stopId){session.busy=false;resetProgress();updateControls();storageUsage()}}
 }
-async function chooseEngine(id){const version=++session.version;session.id=id;session.loading=!!id;session.busy=false;badge('Not loaded');$('pocket7Panel').hidden=id!=='pocket7';$('engineNote').textContent=id?'Fetching the selected runtime and weights only…':'No engine assets requested';resetProgress();clearMetrics();
+async function chooseEngine(id){const version=++session.version;session.voiceRevision++;session.id=id;session.loading=!!id;session.busy=false;badge('Not loaded');$('pocket7Panel').hidden=id!=='pocket7';$('engineNote').textContent=id?'Fetching the selected runtime and weights only…':'No engine assets requested';resetProgress();clearMetrics();
  stopPlayback();const prev=session.backend;session.backend=null;setGenerated(null);assignVoices([],null);if(prev?.dispose)Promise.resolve(prev.dispose()).catch(e=>log('Cleanup: '+e.message));
  if(!id){status('Select an engine to begin.');session.loading=false;updateControls();return}
  takeAudioGesture();badge('Loading','warn');status('Preparing '+LABELS[id]+'…');if(id==='pocket18'||id==='pocket7')setProgress(null,'Loading Pocket ONNX runtime and model...');updateControls();const start=performance.now();
@@ -235,9 +315,21 @@ function startClicked(){takeAudioGesture();if(session.speaking&&session.paused){
 function exportWav(){if(!(session.generated instanceof Blob))return;const a=document.createElement('a'),url=URL.createObjectURL(session.generated);a.href=url;a.download='browser-tts-'+(session.id||'unknown')+'-'+Date.now()+'.wav';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),5000)}
 $('engine').addEventListener('change',e=>chooseEngine(e.target.value));$('loadPocket7').onclick=()=>{if(session.id==='pocket7')chooseEngine('pocket7')};
 $('pocket7Base').value=localStorage.getItem('tts-test-pocket7-url')||'';$('pocket7Base').addEventListener('input',()=>localStorage.setItem('tts-test-pocket7-url',$('pocket7Base').value));
-$('voice').addEventListener('change',async()=>{const current=session.backend,v=getVoice();if(current?.setVoice){try{badge('Loading voice','warn');await current.setVoice(v);badge('Ready','good')}catch(e){status('Voice load failed: '+e.message,'bad')}}});
+$('voice').addEventListener('change',async()=>{
+ const backend=session.backend,model=session.id,version=session.version,revision=++session.voiceRevision;
+ const v=getVoice();if(!backend||session.loading)return;
+ stopPlayback();badge('Loading voice','warn');updateControls();
+ try{
+  await backend.setVoice?.(v);
+  if(session.version!==version||session.voiceRevision!==revision||session.backend!==backend)return;
+  badge('Ready','good');
+  const title=$('voice').selectedOptions?.[0]?.textContent||v;
+  log('Voice selected: '+title);
+  await speakText('You are listening to '+title+'.',true);
+ }catch(e){if(session.version===version&&session.voiceRevision===revision){badge('Voice error','bad');status('Voice load failed: '+e.message,'bad')}}
+});
 $('play').onclick=startClicked;$('pause').onclick=pause;$('resume').onclick=resume;$('stop').onclick=()=>{if(session.loading){++session.version;session.loading=false;const aborted=session.backend;session.backend=null;Promise.resolve(aborted?.dispose?.()).catch(()=>{});stopPlayback();badge('Canceled','warn');status('Model load canceled. Select the model again if needed.','warn')}else{stopPlayback();badge(session.backend?'Ready':'Not loaded');status('Stopped. You can play another sample.')}};$('download').onclick=exportWav;
-$('speed').addEventListener('input',()=>{$('speedValue').value=speed().toFixed(2)+'×';if(session.backend?.kind==='pocket')$('speedHint').textContent='Pocket: playback speed (changes pitch)';else if(session.id==='piper')$('speedHint').textContent='Piper: playback speed (changes pitch)';else $('speedHint').textContent='Native synthesis speed';});
+$('speed').addEventListener('input',()=>{$('speedValue').value=speed().toFixed(2)+'×';if(session.backend?.kind==='pocket')$('speedHint').textContent='Pocket: playback speed (changes pitch)';else if(session.id==='piper')$('speedHint').textContent='Piper: playback speed (changes pitch)';else if(session.id==='espeak')$('speedHint').textContent='Spellophone: native synthesis speed';else $('speedHint').textContent='Native synthesis speed';});
 $('resetText').onclick=()=>{$('text').value=SAMPLE;$('chars').textContent=SAMPLE.length+' characters'};
 $('text').addEventListener('input',()=>{$('chars').textContent=$('text').value.length+' characters'});$('chars').textContent=SAMPLE.length+' characters';
 $('clearLog').onclick=()=>{logLines.length=0;$('log').textContent=''};$('copyLog').onclick=()=>navigator.clipboard.writeText(logLines.join('\n')).catch(e=>status('Clipboard unavailable: '+e.message,'warn'));
