@@ -30,7 +30,7 @@ import sys
 import tempfile
 from typing import Any
 
-MAGIC = b"LTSA1\\0\\0\\0"
+MAGIC = b"LTSA1\0\0\0"
 FORMAT_NAME = "util_many_ltsa"
 CONFIG_FORMAT = "util_many_ltsa_config"
 VERSION = 1
@@ -79,7 +79,7 @@ def _deps():
         import soundfile as sf
     except ImportError as exc:
         raise SystemExit(
-            "ltsa_batch.py needs numpy and soundfile. Run it with:\\n"
+            "ltsa_batch.py needs numpy and soundfile. Run it with:\n"
             "  uv run --with numpy --with soundfile python ltsa_batch.py ..."
         ) from exc
     return np, sf
@@ -183,7 +183,7 @@ def compute_ltsa(path: Path, config: dict[str, Any], *, chunk_windows: int = 256
         def flush(bin_index: int):
             nonlocal current_sum, current_count
             if 0 <= bin_index < plan.time_bins and current_count:
-                result[bin_index] = (10.0 * np.log10(np.maximum(current_sum / current_count, 1e-20))).astype(np.float32)
+                result[bin_index] = (10.0 * np.log10(np.maximum(current_sum / current_count, 1e-18))).astype(np.float32)
             current_sum.fill(0.0)
             current_count = 0
 
@@ -217,8 +217,9 @@ def compute_ltsa(path: Path, config: dict[str, Any], *, chunk_windows: int = 256
             powers = (amplitude[:, f0:f1] ** 2).astype(np.float64, copy=False)
             centers = (np.asarray(batch, dtype=np.float64) + plan.fft_size / 2.0) / sample_rate
             bins = np.floor(centers / plan.average_seconds).astype(np.int64)
-            for b in np.unique(bins):
-                if b >= plan.time_bins:
+            valid = centers < (frames / sample_rate)
+            for b in np.unique(bins[valid]):
+                if b < 0 or b >= plan.time_bins:
                     continue
                 if current_bin != int(b):
                     if current_bin >= 0:
@@ -352,7 +353,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.write_default_config:
         args.write_default_config.parent.mkdir(parents=True, exist_ok=True)
-        args.write_default_config.write_text(json.dumps(DEFAULT_CONFIG, indent=2) + "\\n", encoding="utf-8")
+        args.write_default_config.write_text(json.dumps(DEFAULT_CONFIG, indent=2) + "\n", encoding="utf-8")
         return 0
 
     config = load_config(args.config)
@@ -392,7 +393,7 @@ def main(argv: list[str] | None = None) -> int:
         "results": sorted(results + skipped, key=lambda x: x["input"]),
     }
     manifest_path = args.output_dir / "ltsa_manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\\n", encoding="utf-8")
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     failed = [r for r in results if r["status"] == "failed"]
     print(f"Manifest: {manifest_path}")
     if failed:
