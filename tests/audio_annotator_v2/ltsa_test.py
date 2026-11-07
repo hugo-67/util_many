@@ -95,6 +95,45 @@ class LTSATest(unittest.TestCase):
         ):
             self.assertIn(token, html)
 
+    def test_browser_preview_and_click_navigation(self):
+        try:
+            from playwright.sync_api import sync_playwright
+            from common import F, launch, mount
+        except ImportError as exc:
+            self.skipTest(f"Playwright browser test unavailable: {exc}")
+        audio = F / "ultrasonic_PCM_16.wav"
+        if not audio.is_file():
+            self.skipTest("Run tests/audio_annotator_v2/run.py so synthetic browser fixtures are generated")
+        with sync_playwright() as p:
+            browser = launch(p)
+            try:
+                page = browser.new_page(viewport={"width": 1280, "height": 900})
+                mount(page)
+                page.locator("#fileInput").set_input_files(str(audio))
+                page.wait_for_function("() => !!window.AudioAnnotatorV2?.inspect().meta")
+                page.locator("#ltsaFft").select_option("1024")
+                page.locator("#ltsaOverlap").fill("0")
+                page.locator("#ltsaAverage").fill("0.5")
+                page.locator("#ltsaPreview").click()
+                page.wait_for_function(
+                    "() => { const s=AudioAnnotatorV2.inspect().ltsa; return !!s.header && !s.running; }",
+                    timeout=30000,
+                )
+                state = page.evaluate("() => AudioAnnotatorV2.inspect()")
+                header = state["ltsa"]["header"]
+                self.assertEqual(header["sample_rate"], 384000)
+                self.assertEqual(header["time_bins"], 4)
+                self.assertEqual(header["frequency_bins"], 513)
+                self.assertEqual(state["ltsa"]["values"], 4 * 513)
+                self.assertNotIn("failed", page.locator("#ltsaStatus").inner_text().lower())
+
+                box = page.locator("#ltsaOverlay").bounding_box()
+                self.assertIsNotNone(box)
+                page.mouse.click(box["x"] + box["width"] * 0.5, box["y"] + box["height"] * 0.5)
+                page.wait_for_function("() => Math.abs(AudioAnnotatorV2.inspect().cursor - 1) < 0.1")
+            finally:
+                browser.close()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
