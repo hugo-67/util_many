@@ -127,10 +127,15 @@ class LTSATest(unittest.TestCase):
                 self.assertEqual(state["ltsa"]["values"], 4 * 513)
                 self.assertNotIn("failed", page.locator("#ltsaStatus").inner_text().lower())
 
-                box = page.locator("#ltsaOverlay").bounding_box()
+                overlay = page.locator("#ltsaOverlay")
+                box = overlay.bounding_box()
                 self.assertIsNotNone(box)
-                page.mouse.click(box["x"] + box["width"] * 0.5, box["y"] + box["height"] * 0.5)
-                page.wait_for_function("() => Math.abs(AudioAnnotatorV2.inspect().cursor - 1) < 0.1")
+                data_width = max(20, box["width"] - 80)
+                overlay.click(position={"x": 64 + data_width * 0.5, "y": box["height"] * 0.5})
+                page.wait_for_function(
+                    "() => Math.abs(AudioAnnotatorV2.inspect().cursor - 1) < 0.1",
+                    timeout=5000,
+                )
             finally:
                 browser.close()
 
