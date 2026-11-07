@@ -173,7 +173,7 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 <canvas id="ltsaCanvas" aria-hidden="true"></canvas>
 <canvas id="ltsaOverlay" tabindex="0" aria-label="LTSA navigation surface; click to jump to time"></canvas>
 </div>
-<p class="hint">LTSA runs in a separate worker from interactive waveform/spectrogram analysis. The matrix stores numeric dBFS values, not pixels, so floor/ceiling, colormap and display band can change instantly. Click the LTSA to jump the detailed annotator to that time.</p>
+<p class="hint">LTSA runs in a separate worker from interactive waveform/spectrogram analysis and uses the original source samples (the temporary playback/display audio filter is not applied). The matrix stores numeric dBFS values, not pixels, so floor/ceiling, colormap and display band can change instantly. Click the LTSA to jump the detailed annotator to that time.</p>
 </div>
 </details>
 <div class="split">
@@ -1815,10 +1815,12 @@ self.onmessage = async ({ data: m }) => {
         }
         const plan = ltsaPlan(duration, config);
         if (plan.bytes > LTSA_BROWSER_MAX_BYTES) throw Error('This LTSA interval exceeds the browser memory guard.');
-        const worker = await ensureLTSAWorker(), serial = ++ltsa.serial;
+        const serial = ++ltsa.serial;
         ltsa.running = true; ltsa.lastProgress = 0; updateLTSAControls();
         ltsaSetStatus((full ? 'Building full-recording LTSA' : 'Building LTSA preview') + ' in a dedicated worker…');
         try {
+            const worker = await ensureLTSAWorker();
+            if (serial !== ltsa.serial) return;
             const a = config.analysis, result = await worker.call('ltsaCompute', { jobId: serial, fft: Number(a.fft_size),
                 overlap: Number(a.overlap), averageSeconds: Number(a.average_seconds), channel: Number(a.channel),
                 frequencyMin: Number(a.frequency_min_hz || 0), frequencyMax: a.frequency_max_hz, start, duration,
@@ -2276,10 +2278,10 @@ self.onmessage = async ({ data: m }) => {
         pause();
         app.analysis?.close();
         app.playback?.close();
-        resetLTSA();
         app.analysis = app.playback = null;
         app.file = null;
         app.meta = null;
+        resetLTSA();
         app.cursor = 0;
         app.start = 0;
         updateTransport();
