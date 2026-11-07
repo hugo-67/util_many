@@ -2,6 +2,10 @@
 <!--
 Programmer Reference Summary — Audio Annotator v2 (clean-room implementation)
 Purpose: annotate local audio with synchronized native-rate waveform/spectrogram views.
+Long-Term Spectral Average (LTSA) adds a dedicated bounded-memory worker, preview/full
+recording generation, click-to-navigate overview, shared JSON configuration and a
+portable Float32 .ltsa format compatible with ltsa_batch.py. LTSA averages linear
+power (Hann FFT frames) before conversion to dBFS; display changes never recompute data.
 Open this file directly; no server, build, network requests, or external dependencies.
 WAV/RF64/BW64 PCM (8/16/24/32-bit), IEEE float (32/64-bit), and native FLAC are
 read in bounded slices in inline Blob workers, NOT decoded into a whole-file AudioBuffer.
@@ -69,8 +73,8 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="Standalone, client-side audio annotation with synchronized native-sample-rate waveform and spectrogram views, bounded-memory WAV and FLAC reading, ultrasonic playback slowdown, editable point/time/frequency markers, case-sensitive tags, undo/redo and JSON/CSV/Audacity TXT import and export.">
-<meta name="keywords" content="audio annotator, spectrogram, waveform, ultrasound, bioacoustics, WAV, RF64, FLAC, audio labeling, frequency annotation">
+<meta name="description" content="Standalone, client-side audio annotation with synchronized native-sample-rate waveform, spectrogram and LTSA views, bounded-memory WAV/FLAC reading, portable LTSA import/export, ultrasonic playback slowdown, editable annotations and scientific batch-processing configuration.">
+<meta name="keywords" content="audio annotator, spectrogram, waveform, LTSA, long term spectral average, ultrasound, bioacoustics, marine mammal acoustics, WAV, RF64, FLAC, audio labeling, frequency annotation">
 <title>Audio Annotator v2</title>
 <style>
 :root{font:14px system-ui,sans-serif;color:#20252b;background:#f7f8fa;color-scheme:light}*{box-sizing:border-box}body{margin:18px auto;padding:0 16px;max-width:1800px}h1{font-size:23px;margin:0 0 6px}h2{font-size:16px;margin:8px 0}p{margin:6px 0}.row{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:8px 0}.grow{flex:1;min-width:120px}.panel{background:white;border:1px solid #d5dbe1;border-radius:5px;padding:10px;margin:10px 0}.hint{font-size:12px;color:#596570}.badge{font-size:12px;padding:3px 7px;background:#e8eef5;border-radius:4px}button,select,input,textarea{font:inherit}textarea{padding:5px 7px;resize:vertical}button,select,input:not([type=range]):not([type=radio]):not([type=checkbox]):not([type=color]){padding:5px 7px}button{cursor:pointer;border:1px solid #b8c2cc;background:#fff;border-radius:4px}button:hover:not(:disabled){background:#edf3f8}button:disabled{opacity:.45;cursor:default}input[type=number]{width:95px}#highPassHz,#lowPassHz{width:110px}#audioFilterInfo.error{color:#a32222}input[type=range]{vertical-align:middle}input[type=color]{width:38px;height:28px;padding:0}label{display:inline-flex;gap:5px;align-items:center}label.stack{display:flex;flex-direction:column;align-items:flex-start}#fileInput{max-width:360px}#status{min-height:22px;white-space:pre-wrap}#status.error{color:#a32222}#status.ok{color:#275b32}#fileInfo{overflow-wrap:anywhere}.plots{min-width:0}.plot{position:relative;width:100%;height:190px;overflow:hidden;border:1px solid #bfc9d1;background:#111b27}.plot.spectral{height:320px;margin-top:8px}.plot canvas{position:absolute;inset:0;width:100%;height:100%;display:block}.plot canvas.overlay{touch-action:none;cursor:crosshair}#scrollSlider,#scrubSlider{flex:1;min-width:160px}#tagInput{width:65px}#labelInput{width:180px}.split{display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:12px}.side{min-width:0}.tableWrap{max-height:285px;overflow:auto}table{border-collapse:collapse;width:100%;font-size:12px}th,td{padding:5px;text-align:left;border-bottom:1px solid #e0e5eb;vertical-align:top;overflow-wrap:anywhere}th{position:sticky;top:0;background:#f3f6f8}tr.selected{background:#e5f1ff}td button{padding:2px 5px}#tagsList .row{flex-wrap:nowrap}#tagsList input[type=text]{min-width:0;width:100%}#tagsList input[type=number]{width:55px}#tagFilter{width:100%}#editor input,#editor textarea{width:100%}#editor .row>label{flex:1;min-width:100px}summary{cursor:pointer;font-weight:600}body.dragging{outline:4px dashed #347cb5;outline-offset:-5px}.swatch{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px}kbd{font:12px monospace;border:1px solid #c8cfd6;border-radius:3px;padding:1px 4px}progress{max-width:130px}#frequencyLegend{display:inline-block;width:85px;height:9px;background:linear-gradient(90deg,#080923,#322275,#96377a,#e7834a,#fcf3b0)}.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}@media(max-width:1000px){.split{grid-template-columns:1fr}.plot.spectral{height:280px}body{padding:0 8px;margin:10px auto}.side{display:grid;grid-template-columns:1fr 1fr;gap:8px}}@media(max-width:600px){.side{display:block}input[type=range]{max-width:100%}}
@@ -97,6 +101,19 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 #importChoiceDialog{border:1px solid #9eb4c7;border-radius:7px;max-width:min(92vw,540px);padding:18px;box-shadow:0 8px 35px #0004}
 #importChoiceDialog::backdrop{background:#07182999}
 #importChoiceDialog .row button{flex:1;min-width:105px}
+
+#ltsaPanel>summary{cursor:pointer;font-weight:700;font-size:15px}
+#ltsaPanel .ltsa-controls{margin-top:10px}
+#ltsaPanel input[type=number]{width:105px}
+#ltsaPlot{position:relative;width:100%;height:245px;overflow:hidden;border:1px solid #bfc9d1;background:#111b27;border-radius:3px;margin-top:8px}
+#ltsaPlot canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+#ltsaOverlay{touch-action:none;cursor:crosshair}
+#ltsaStatus,#ltsaEstimate{min-height:18px}
+#ltsaStatus.error,#ltsaEstimate.error{color:#a32222}
+#ltsaStatus.ok{color:#275b32}
+#ltsaProgress{width:180px;max-width:35vw}
+.ltsa-file-input{max-width:230px}
+@media(max-width:600px){#ltsaPlot{height:210px}#ltsaProgress{max-width:100%;width:150px}}
 </style>
 </head>
 <body>
@@ -117,6 +134,48 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 <div class="row"><label>FFT <select id="fftSize"><option>32</option><option>64</option><option>128</option><option>256</option><option>512</option><option>1024</option><option selected>2048</option><option>4096</option><option>8192</option><option>16384</option></select></label><label>Y-axis scale <select id="frequencyScale" title="Frequency-axis display mapping; annotations remain stored in Hz"><option value="linear" selected>Linear (Hz)</option><option value="log">Logarithmic (octaves)</option><option value="mel">Mel</option><option value="bark">Bark</option><option value="erb">ERB</option><option value="period">Period (1/f)</option></select></label><label>Frequency min (Hz) <input id="displayFreqMin" type="number" min="0" step="any" value="0"></label><label>max (Hz) <input id="displayFreqMax" type="number" min="1" step="any" value="48000"></label><button id="fullBandBtn" disabled>Full Nyquist band</button><label>Floor (dBFS) <input id="dbMin" type="number" min="-180" max="0" value="-100"></label><label>Ceiling <input id="dbMax" type="number" min="-179" max="20" value="0"></label><label>Color <select id="colorMap"><option value="ember">Ember</option><option value="gray">Grayscale</option><option value="ocean">Ocean</option></select></label><span id="frequencyLegend" aria-hidden="true"></span></div>
 <div class="row"><button id="panLeft" disabled>◀ Pan</button><input id="scrollSlider" aria-label="Visible window start" type="range" min="0" max="1" step="any" value="0" disabled><button id="panRight" disabled>Pan ▶</button><output id="viewLabel">No window</output></div>
 </section>
+<details class="panel" id="ltsaPanel" open>
+<summary>Long-Term Spectral Average (LTSA)</summary>
+<div class="ltsa-controls">
+<div class="row">
+<label>FFT <select id="ltsaFft"><option>256</option><option>512</option><option>1024</option><option>2048</option><option>4096</option><option selected>8192</option><option>16384</option></select></label>
+<label>Overlap <input id="ltsaOverlap" type="number" min="0" max="0.94" step="0.05" value="0"></label>
+<label>Average / bin (s) <input id="ltsaAverage" type="number" min="0.001" step="any" value="60"></label>
+<label>Channel <select id="ltsaChannel"><option value="0">Channel 1</option></select></label>
+<label>Stored min (Hz) <input id="ltsaFreqMin" type="number" min="0" step="any" value="0"></label>
+<label>Stored max (Hz) <input id="ltsaFreqMax" type="number" min="0" step="any" placeholder="Nyquist"></label>
+</div>
+<div class="row">
+<button id="ltsaPreview" disabled>Preview current view</button>
+<button id="ltsaBuildFull" disabled>Build full recording</button>
+<button id="ltsaCancel" disabled>Cancel</button>
+<progress id="ltsaProgress" max="1" value="0" aria-label="LTSA processing progress"></progress>
+<span id="ltsaProgressText" class="hint"></span>
+</div>
+<div id="ltsaEstimate" class="hint">Load audio to estimate LTSA size and work.</div>
+<div class="row">
+<strong>Display</strong>
+<label>Min (Hz) <input id="ltsaViewFreqMin" type="number" min="0" step="any" value="0"></label>
+<label>Max (Hz) <input id="ltsaViewFreqMax" type="number" min="0" step="any" placeholder="Stored max"></label>
+<label>Floor (dBFS) <input id="ltsaDbMin" type="number" min="-200" max="20" step="any" value="-120"></label>
+<label>Ceiling <input id="ltsaDbMax" type="number" min="-199" max="40" step="any" value="0"></label>
+<label>Color <select id="ltsaColor"><option value="ember" selected>Ember</option><option value="gray">Grayscale</option><option value="ocean">Ocean</option></select></label>
+</div>
+<div class="row">
+<button id="ltsaExportConfig">Export LTSA config JSON</button>
+<label>Import config <input id="ltsaConfigImport" class="ltsa-file-input" type="file" accept=".json,application/json"></label>
+<button id="ltsaExport" disabled>Export .ltsa</button>
+<label>Import .ltsa <input id="ltsaImport" class="ltsa-file-input" type="file" accept=".ltsa,application/octet-stream"></label>
+<span id="ltsaHover" class="hint grow"></span>
+</div>
+<div id="ltsaStatus" class="hint" role="status" aria-live="polite">Preview a representative window while tuning; use Python batch processing for very large archives.</div>
+<div id="ltsaPlot" aria-label="Long-term spectral average overview">
+<canvas id="ltsaCanvas" aria-hidden="true"></canvas>
+<canvas id="ltsaOverlay" tabindex="0" aria-label="LTSA navigation surface; click to jump to time"></canvas>
+</div>
+<p class="hint">LTSA runs in a separate worker from interactive waveform/spectrogram analysis. The matrix stores numeric dBFS values, not pixels, so floor/ceiling, colormap and display band can change instantly. Click the LTSA to jump the detailed annotator to that time.</p>
+</div>
+</details>
 <div class="split">
 <main class="plots">
 <section class="panel" aria-label="Annotation tools">
@@ -677,7 +736,7 @@ class FlacSource {
         return out;
     }
 }
-let source = null, renderBusy = false, pendingRender = null, renderToken = 0, overview = null, overviewToken = 0, overviewRevision = 0;
+let source = null, renderBusy = false, pendingRender = null, renderToken = 0, overview = null, overviewToken = 0, overviewRevision = 0, ltsaToken = 0;
 const spectra = new LRU(32 * MiB), fftPlans = new LRU(2 * MiB), resamplers = new LRU(2 * MiB);
 function fftPlan(n) {
     let plan = fftPlans.get(n);
@@ -1376,6 +1435,83 @@ async function audioChunk(p) {
     }
     return { data: out, next: Math.min(source.frames, p.position + frames * ratio) };
 }
+
+async function ltsaCompute(p, token) {
+    const supported = [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384];
+    const fft = Number(p.fft), overlap = Number(p.overlap), averageSeconds = Number(p.averageSeconds);
+    const channel = Number(p.channel), sampleRate = source.sampleRate, fullDuration = source.frames / sampleRate;
+    if (!supported.includes(fft) || !Number.isFinite(overlap) || overlap < 0 || overlap >= .95 ||
+        !Number.isFinite(averageSeconds) || averageSeconds <= 0 || !Number.isInteger(channel) ||
+        channel < -1 || channel >= source.channels) throw Error('Invalid LTSA analysis settings.');
+    const hop = Math.max(1, Math.round(fft * (1 - overlap)));
+    const start = clamp(Number.isFinite(Number(p.start)) ? Number(p.start) : 0, 0, fullDuration);
+    const duration = clamp(Number.isFinite(Number(p.duration)) ? Number(p.duration) : fullDuration - start, 0, fullDuration - start);
+    if (!(duration > 0)) throw Error('LTSA interval must have positive duration.');
+    const end = start + duration, nyquist = sampleRate / 2, hzPerBin = sampleRate / fft;
+    const fmin = clamp(Number.isFinite(Number(p.frequencyMin)) ? Number(p.frequencyMin) : 0, 0, nyquist);
+    const fmax = p.frequencyMax === null || p.frequencyMax === undefined || p.frequencyMax === '' ? nyquist :
+        clamp(Number(p.frequencyMax), 0, nyquist);
+    if (!Number.isFinite(fmax) || fmax <= fmin) throw Error('LTSA stored frequency maximum must be above minimum.');
+    const firstFrequencyBin = Math.max(0, Math.ceil(fmin / hzPerBin - 1e-12));
+    const lastFrequencyBin = Math.min(fft / 2, Math.floor(fmax / hzPerBin + 1e-12));
+    const frequencyBins = lastFrequencyBin - firstFrequencyBin + 1;
+    const timeBins = Math.max(1, Math.ceil(duration / averageSeconds));
+    const bytes = timeBins * frequencyBins * 4, maxBytes = Number(p.maxBytes) || 256 * MiB;
+    if (!Number.isSafeInteger(bytes) || bytes > maxBytes)
+        throw Error('LTSA matrix exceeds the browser memory guard.');
+    const data = new Float32Array(timeBins * frequencyBins);
+    data.fill(NaN);
+    const sum = new Float64Array(frequencyBins), scratch = new Float32Array(fft / 2 + 1);
+    let currentBin = -1, currentCount = 0;
+    const flush = () => {
+        if (currentBin >= 0 && currentBin < timeBins && currentCount) {
+            const base = currentBin * frequencyBins;
+            for (let f = 0; f < frequencyBins; f++)
+                data[base + f] = 10 * Math.log10(Math.max(1e-20, sum[f] / currentCount));
+        }
+        sum.fill(0);
+        currentCount = 0;
+    };
+    const startSample = start * sampleRate, endSample = end * sampleRate;
+    const firstFrameStart = Math.max(0, Math.ceil((startSample - fft / 2) / hop) * hop);
+    const byEnd = Math.max(0, Math.ceil((endSample - fft / 2 - firstFrameStart) / hop));
+    const byFile = Math.max(0, Math.ceil((source.frames - firstFrameStart) / hop));
+    const totalWindows = Math.min(byEnd, byFile);
+    let processed = 0, lastNotify = 0;
+    while (processed < totalWindows) {
+        if (token !== ltsaToken) throw Error('LTSA_CANCELLED');
+        const count = Math.min(64, totalWindows - processed), blockStart = firstFrameStart + processed * hop;
+        const blockLength = (count - 1) * hop + fft, samples = await source.read(blockStart, blockLength, channel);
+        if (token !== ltsaToken) throw Error('LTSA_CANCELLED');
+        for (let j = 0; j < count; j++) {
+            const frameStart = blockStart + j * hop, center = (frameStart + fft / 2) / sampleRate;
+            const bin = Math.floor((center - start) / averageSeconds);
+            if (bin < 0 || bin >= timeBins) continue;
+            if (bin !== currentBin) {
+                if (currentBin >= 0) flush();
+                currentBin = bin;
+            }
+            spectrum(samples.subarray(j * hop, j * hop + fft), fft, scratch);
+            for (let f = 0; f < frequencyBins; f++)
+                sum[f] += 10 ** (scratch[firstFrequencyBin + f] / 10);
+            currentCount++;
+        }
+        processed += count;
+        const now = performance.now();
+        if (now - lastNotify > 120 || processed === totalWindows) {
+            postMessage({ event: 'ltsaProgress', jobId: p.jobId, progress: totalWindows ? processed / totalWindows : 1,
+                windows: processed, totalWindows });
+            lastNotify = now;
+        }
+        await sleep();
+    }
+    if (currentBin >= 0) flush();
+    if (token !== ltsaToken) throw Error('LTSA_CANCELLED');
+    return { data, sampleRate, channels: source.channels, timeBins, frequencyBins, timeBinSeconds: averageSeconds,
+        frequencyBinHz: hzPerBin, frequencyStartHz: firstFrequencyBin * hzPerBin,
+        frequencyEndHz: lastFrequencyBin * hzPerBin, firstFrequencyBin, timeOriginSeconds: start,
+        durationSeconds: duration, fftWindows: totalWindows, fft, hop, overlap, channel };
+}
 self.onmessage = async ({ data: m }) => {
     try {
         if (m.type === 'init') {
@@ -1386,6 +1522,17 @@ self.onmessage = async ({ data: m }) => {
         }
         if (!source)
             throw Error('No audio source.');
+        if (m.type === 'ltsaCancel') {
+            ltsaToken++;
+            postMessage({ id: m.id, result: true });
+            return;
+        }
+        if (m.type === 'ltsaCompute') {
+            const token = ++ltsaToken, result = await ltsaCompute(m.params || {}, token);
+            if (token !== ltsaToken) throw Error('LTSA_CANCELLED');
+            postMessage({ id: m.id, result }, [result.data.buffer]);
+            return;
+        }
         if (m.type === 'setFilter') {
             postMessage({ id: m.id, result: updateAudioFilter(m.params) });
             return;
@@ -1489,6 +1636,9 @@ self.onmessage = async ({ data: m }) => {
 (() => {
     const $ = id => document.getElementById(id), clamp = (v, a, b) => Math.max(a, Math.min(b, v)), finite = (v, fallback = 0) => Number.isFinite(Number(v)) ? Number(v) : fallback;
     const MAX_MARKERS = 1000000, HISTORY_BYTES = 256 * 1048576, MAX_IMPORT_BYTES = 256 * 1048576;
+    const LTSA_BROWSER_MAX_BYTES = 256 * 1048576, LTSA_IMPORT_MAX_BYTES = 512 * 1048576, LTSA_PREVIEW_MAX_SECONDS = 600;
+    const LTSA_CONFIG_FORMAT = 'util_many_ltsa_config', LTSA_FORMAT = 'util_many_ltsa', LTSA_VERSION = 1;
+    const LITTLE_ENDIAN = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
     const app = { file: null, meta: null, loadEpoch: 0, analysis: null, playback: null, start: 0, span: 10, cursor: 0, playing: false, playEpoch: 0, context: null, gain: null, analyser: null, nodes: new Set(), segments: [], nextPosition: 0, nextWhen: 0, pumpBusy: false, renderSerial: 0, renderTimer: 0, refineTimer: 0, renderFrame: 0, renderTarget: null, prefetchTimer: 0, prefetchTarget: null, zoomHint: null, renderCache: [], renderCacheBytes: 0, lastRender: null, renderPending: false, markers: new Map(), tags: new Map(), selected: null, undo: [], redo: [], historyBytes: 0, dirty: false, page: 0, markerVersion: 0, markerIndex: null, filteredIndices: new Map(), tableCache: null, overlayLayers: {}, annotationViews: new Map(), importSources: new Map(), sourceVersion: 0, trackHeights: new Map(), resizeObserver: null, plotRenderTimer: 0, tableTimer: 0, tableSerial: 0, importBusy: false, importSerial: 0, held: null, gesture: null, overview: { active: false, progress: 0 }, viewChannel: 0, overviewRequest: 0, audioFilter: null, filterSerial: 0, filterUpdating: false, filterQueued: false, filterResumePlayback: false, filterTaps: 0 };
     const workerURL = URL.createObjectURL(new Blob([$('audio-worker').textContent], { type: 'text/javascript' }));
     class RPC {
@@ -1529,6 +1679,279 @@ self.onmessage = async ({ data: m }) => {
                 p.reject(Error('Worker closed.'));
             this.pending.clear();
         }
+    }
+    const ltsa = { worker: null, workerEpoch: -1, running: false, serial: 0, data: null, header: null, lastProgress: 0 };
+    function ltsaSetStatus(message, error = false, ok = false) {
+        const el = $('ltsaStatus');
+        el.textContent = message;
+        el.classList.toggle('error', error);
+        el.classList.toggle('ok', ok && !error);
+    }
+    function populateLTSAChannels(count) {
+        const select = $('ltsaChannel'), previous = select.value;
+        select.replaceChildren();
+        for (let c = 0; c < count; c++) select.append(new Option('Channel ' + (c + 1), String(c)));
+        if (count > 1) select.append(new Option('Mix (average)', '-1'));
+        select.value = Array.from(select.options).some(o => o.value === previous) ? previous : '0';
+    }
+    function currentLTSAConfig() {
+        const maxText = $('ltsaFreqMax').value.trim();
+        return { format: LTSA_CONFIG_FORMAT, version: LTSA_VERSION, analysis: {
+            fft_size: Number($('ltsaFft').value), window: 'hann',
+            overlap: finite($('ltsaOverlap').value, 0), average_seconds: finite($('ltsaAverage').value, 60),
+            channel: Number($('ltsaChannel').value), frequency_min_hz: finite($('ltsaFreqMin').value, 0),
+            frequency_max_hz: maxText === '' ? null : finite(maxText, NaN)
+        }, display: { db_min: finite($('ltsaDbMin').value, -120), db_max: finite($('ltsaDbMax').value, 0), colormap: $('ltsaColor').value } };
+    }
+    function validateLTSAConfig(config) {
+        if (!config || typeof config !== 'object' || (config.format && config.format !== LTSA_CONFIG_FORMAT) || Number(config.version || 1) !== LTSA_VERSION)
+            throw Error('Unsupported LTSA configuration format/version.');
+        const a = config.analysis || {}, supported = [32,64,128,256,512,1024,2048,4096,8192,16384];
+        if (!supported.includes(Number(a.fft_size)) || String(a.window || 'hann').toLowerCase() !== 'hann')
+            throw Error('LTSA config requires a supported FFT size and Hann window.');
+        const overlap = Number(a.overlap), average = Number(a.average_seconds), ch = Number(a.channel);
+        if (!Number.isFinite(overlap) || overlap < 0 || overlap >= .95 || !Number.isFinite(average) || average <= 0 || !Number.isInteger(ch))
+            throw Error('Invalid LTSA overlap, averaging interval or channel.');
+        return config;
+    }
+    function applyLTSAConfig(raw) {
+        const config = validateLTSAConfig(raw), a = config.analysis || {}, d = config.display || {};
+        $('ltsaFft').value = String(Number(a.fft_size));
+        $('ltsaOverlap').value = String(Number(a.overlap));
+        $('ltsaAverage').value = String(Number(a.average_seconds));
+        if (Array.from($('ltsaChannel').options).some(o => Number(o.value) === Number(a.channel))) $('ltsaChannel').value = String(Number(a.channel));
+        $('ltsaFreqMin').value = String(Number(a.frequency_min_hz || 0));
+        $('ltsaFreqMax').value = a.frequency_max_hz === null || a.frequency_max_hz === undefined ? '' : String(Number(a.frequency_max_hz));
+        if (Number.isFinite(Number(d.db_min))) $('ltsaDbMin').value = String(Number(d.db_min));
+        if (Number.isFinite(Number(d.db_max))) $('ltsaDbMax').value = String(Number(d.db_max));
+        if (['ember','gray','ocean'].includes(d.colormap)) $('ltsaColor').value = d.colormap;
+        updateLTSAEstimate();
+        drawLTSABase();
+    }
+    function ltsaPlan(duration = app.meta?.duration || 0, config = currentLTSAConfig()) {
+        if (!app.meta) return null;
+        validateLTSAConfig(config);
+        const a = config.analysis, fft = Number(a.fft_size), overlap = Number(a.overlap), average = Number(a.average_seconds);
+        const hop = Math.max(1, Math.round(fft * (1 - overlap))), nyquist = app.meta.sampleRate / 2, hzPerBin = app.meta.sampleRate / fft;
+        const fmin = clamp(Number(a.frequency_min_hz || 0), 0, nyquist);
+        const fmax = a.frequency_max_hz === null ? nyquist : clamp(Number(a.frequency_max_hz), 0, nyquist);
+        if (!Number.isFinite(fmax) || fmax <= fmin) throw Error('Stored LTSA frequency maximum must be above minimum.');
+        if (a.channel < -1 || a.channel >= app.meta.channels) throw Error('LTSA channel is outside this recording.');
+        const first = Math.max(0, Math.ceil(fmin / hzPerBin - 1e-12)), last = Math.min(fft / 2, Math.floor(fmax / hzPerBin + 1e-12));
+        const frequencyBins = last - first + 1, timeBins = Math.max(1, Math.ceil(duration / average)), bytes = timeBins * frequencyBins * 4;
+        const windows = Math.max(0, Math.ceil(app.meta.frames / hop));
+        return { fft, hop, average, fmin, fmax, first, last, frequencyBins, timeBins, bytes, windows, hzPerBin };
+    }
+    function updateLTSAEstimate() {
+        const el = $('ltsaEstimate');
+        el.classList.remove('error');
+        if (!app.meta) {
+            el.textContent = 'Load audio to estimate LTSA size and work.';
+            $('ltsaPreview').disabled = true; $('ltsaBuildFull').disabled = true;
+            return;
+        }
+        try {
+            const plan = ltsaPlan(), mib = plan.bytes / 1048576, tooLarge = plan.bytes > LTSA_BROWSER_MAX_BYTES;
+            let message = plan.timeBins.toLocaleString() + ' time bins × ' + plan.frequencyBins.toLocaleString() +
+                ' frequency bins · ~' + fmt(mib, mib < 10 ? 2 : 1) + ' MiB matrix · ~' + plan.windows.toLocaleString() +
+                ' FFT windows for the full recording.';
+            if (tooLarge) {
+                const needed = app.meta.duration * plan.frequencyBins * 4 / LTSA_BROWSER_MAX_BYTES;
+                message += ' Browser full build is disabled; use average/bin ≳ ' + fmt(Math.max(plan.average, needed), 2) + ' s, narrow the stored band, or run ltsa_batch.py.';
+                el.classList.add('error');
+            }
+            el.textContent = message;
+            $('ltsaPreview').disabled = ltsa.running;
+            $('ltsaBuildFull').disabled = ltsa.running || tooLarge;
+        } catch (e) {
+            el.textContent = e.message;
+            el.classList.add('error');
+            $('ltsaPreview').disabled = true; $('ltsaBuildFull').disabled = true;
+        }
+    }
+    function updateLTSAControls() {
+        $('ltsaCancel').disabled = !ltsa.running;
+        $('ltsaExport').disabled = !ltsa.data;
+        $('ltsaProgress').value = ltsa.running ? ltsa.lastProgress : (ltsa.data ? 1 : 0);
+        if (!ltsa.running && !ltsa.data) $('ltsaProgressText').textContent = '';
+        updateLTSAEstimate();
+    }
+    function resetLTSA() {
+        ltsa.serial++;
+        ltsa.worker?.close();
+        ltsa.worker = null; ltsa.workerEpoch = -1; ltsa.running = false; ltsa.data = null; ltsa.header = null; ltsa.lastProgress = 0;
+        $('ltsaProgress').value = 0; $('ltsaProgressText').textContent = ''; $('ltsaExport').disabled = true;
+        ltsaSetStatus('Preview a representative window while tuning; use Python batch processing for very large archives.');
+        drawLTSABase(); drawLTSAOverlay(); updateLTSAEstimate();
+    }
+    async function ensureLTSAWorker() {
+        if (!app.file || !app.meta) throw Error('Load audio before computing LTSA.');
+        if (ltsa.worker && ltsa.workerEpoch === app.loadEpoch) return ltsa.worker;
+        ltsa.worker?.close();
+        const worker = new RPC();
+        await worker.call('init', app.file);
+        if (!app.file) { worker.close(); throw Error('Audio changed while initializing LTSA worker.'); }
+        ltsa.worker = worker; ltsa.workerEpoch = app.loadEpoch;
+        return worker;
+    }
+    function makeLTSAHeader(config, result) {
+        return { format: LTSA_FORMAT, version: LTSA_VERSION, source: { name: app.file?.name || null,
+            size_bytes: app.file?.size ?? null, last_modified: app.file?.lastModified ?? null }, config,
+            sample_rate: result.sampleRate, channels: result.channels, full_recording_duration_seconds: app.meta?.duration ?? result.durationSeconds,
+            duration_seconds: result.durationSeconds, time_origin_seconds: result.timeOriginSeconds || 0,
+            time_bins: result.timeBins, frequency_bins: result.frequencyBins, time_bin_seconds: result.timeBinSeconds,
+            frequency_bin_hz: result.frequencyBinHz, frequency_start_hz: result.frequencyStartHz, frequency_end_hz: result.frequencyEndHz,
+            first_frequency_bin: result.firstFrequencyBin, fft_windows: result.fftWindows, data_dtype: 'float32_le',
+            data_order: 'time_frequency', quantity: 'power_dbfs' };
+    }
+    async function runLTSA(scope) {
+        if (ltsa.running) return;
+        const config = currentLTSAConfig(), full = scope === 'full';
+        validateLTSAConfig(config);
+        let start = 0, duration = app.meta.duration;
+        if (!full) {
+            duration = Math.min(app.span, LTSA_PREVIEW_MAX_SECONDS);
+            start = app.span <= duration ? app.start : clamp(app.cursor - duration / 2, app.start, app.start + app.span - duration);
+        }
+        const plan = ltsaPlan(duration, config);
+        if (plan.bytes > LTSA_BROWSER_MAX_BYTES) throw Error('This LTSA interval exceeds the browser memory guard.');
+        const worker = await ensureLTSAWorker(), serial = ++ltsa.serial;
+        ltsa.running = true; ltsa.lastProgress = 0; updateLTSAControls();
+        ltsaSetStatus((full ? 'Building full-recording LTSA' : 'Building LTSA preview') + ' in a dedicated worker…');
+        try {
+            const a = config.analysis, result = await worker.call('ltsaCompute', { jobId: serial, fft: Number(a.fft_size),
+                overlap: Number(a.overlap), averageSeconds: Number(a.average_seconds), channel: Number(a.channel),
+                frequencyMin: Number(a.frequency_min_hz || 0), frequencyMax: a.frequency_max_hz, start, duration,
+                maxBytes: LTSA_BROWSER_MAX_BYTES });
+            if (serial !== ltsa.serial) return;
+            ltsa.data = result.data;
+            ltsa.header = makeLTSAHeader(config, result);
+            $('ltsaViewFreqMin').value = fmt(result.frequencyStartHz, 6);
+            $('ltsaViewFreqMax').value = fmt(result.frequencyEndHz, 6);
+            ltsa.lastProgress = 1;
+            drawLTSABase(); drawLTSAOverlay();
+            ltsaSetStatus((full ? 'Full LTSA ready' : 'Preview ready') + ' · ' + result.timeBins.toLocaleString() + ' × ' +
+                result.frequencyBins.toLocaleString() + ' values · ' + result.fftWindows.toLocaleString() + ' FFT windows.', false, true);
+        } catch (e) {
+            if (serial !== ltsa.serial || e.message === 'LTSA_CANCELLED') return;
+            ltsaSetStatus('LTSA failed: ' + e.message, true);
+            throw e;
+        } finally {
+            if (serial === ltsa.serial) {
+                ltsa.running = false;
+                updateLTSAControls();
+            }
+        }
+    }
+    async function cancelLTSA() {
+        if (!ltsa.running) return;
+        ltsa.serial++; ltsa.running = false; ltsa.lastProgress = 0;
+        updateLTSAControls();
+        ltsaSetStatus('Cancelling LTSA…');
+        try { await ltsa.worker?.call('ltsaCancel'); } catch {}
+        ltsaSetStatus('LTSA cancelled. Existing completed LTSA data, if any, is unchanged.');
+    }
+    function ltsaPalette(name) {
+        const stops = name === 'gray' ? [[0,0,0],[255,255,255]] : name === 'ocean' ?
+            [[4,12,31],[14,59,98],[18,133,142],[120,207,164],[242,248,204]] :
+            [[8,9,35],[50,34,117],[150,55,122],[231,131,74],[252,243,176]];
+        return Array.from({length:256}, (_, i) => { const x=i/255*(stops.length-1), j=Math.min(stops.length-2,Math.floor(x)), t=x-j;
+            return stops[j].map((v,c)=>Math.round(v*(1-t)+stops[j+1][c]*t)); });
+    }
+    function ltsaGeometry(canvas) {
+        const box = canvas.getBoundingClientRect(), width = Math.max(1, Math.round(box.width)), height = Math.max(1, Math.round(box.height));
+        if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+        return { ctx: canvas.getContext('2d'), left: 64, top: 20, w: Math.max(20, width - 80), h: Math.max(20, height - 48), width, height };
+    }
+    function drawLTSABase() {
+        const canvas = $('ltsaCanvas'), g = ltsaGeometry(canvas), ctx = g.ctx;
+        ctx.clearRect(0,0,g.width,g.height); ctx.fillStyle='#111b27'; ctx.fillRect(0,0,g.width,g.height);
+        if (!ltsa.data || !ltsa.header) {
+            ctx.fillStyle='#b9c4ce'; ctx.font='13px system-ui'; ctx.fillText('No LTSA loaded or computed yet.', g.left + 10, g.top + 24);
+            return;
+        }
+        const h = ltsa.header, T=Number(h.time_bins), F=Number(h.frequency_bins), binHz=Number(h.frequency_bin_hz), baseHz=Number(h.frequency_start_hz);
+        let fmin = finite($('ltsaViewFreqMin').value, baseHz), fmax = finite($('ltsaViewFreqMax').value, Number(h.frequency_end_hz));
+        fmin = clamp(fmin, baseHz, Number(h.frequency_end_hz)); fmax = clamp(fmax, baseHz, Number(h.frequency_end_hz));
+        if (fmax <= fmin) { fmin=baseHz; fmax=Number(h.frequency_end_hz); }
+        const dbMin=finite($('ltsaDbMin').value,-120), dbMax=Math.max(dbMin+.001,finite($('ltsaDbMax').value,0)), colors=ltsaPalette($('ltsaColor').value);
+        const w=Math.max(1,Math.floor(g.w)), hh=Math.max(1,Math.floor(g.h)), rgba=new Uint8ClampedArray(w*hh*4);
+        for(let y=0;y<hh;y++){
+            const hz=fmax-(y+.5)/hh*(fmax-fmin), fi=clamp(Math.round((hz-baseHz)/binHz),0,F-1);
+            for(let x=0;x<w;x++){
+                const t0=Math.floor(x*T/w), t1=Math.max(t0+1,Math.ceil((x+1)*T/w)), span=t1-t0, samples=Math.min(16,span);
+                let value=-Infinity;
+                for(let q=0;q<samples;q++){
+                    const ti=span<=16?t0+q:Math.min(t1-1,t0+Math.floor((q+.5)*span/samples));
+                    const v=ltsa.data[ti*F+fi]; if(Number.isFinite(v)&&v>value)value=v;
+                }
+                const level=Number.isFinite(value)?clamp((value-dbMin)/(dbMax-dbMin),0,1):0, c=colors[Math.round(level*255)], at=(y*w+x)*4;
+                rgba[at]=c[0];rgba[at+1]=c[1];rgba[at+2]=c[2];rgba[at+3]=255;
+            }
+        }
+        ctx.putImageData(new ImageData(rgba,w,hh), Math.round(g.left), Math.round(g.top));
+        ctx.strokeStyle='#9fb0bf';ctx.lineWidth=1;ctx.strokeRect(g.left,g.top,w,hh);
+        ctx.fillStyle='#dce5ec';ctx.font='11px system-ui';ctx.textAlign='right';
+        for(let i=0;i<=4;i++){const frac=i/4,hz=fmin+(1-frac)*(fmax-fmin),y=g.top+frac*hh;ctx.fillText(hz>=1000?fmt(hz/1000,1)+'k':fmt(hz,0),g.left-6,y+4);}
+        ctx.textAlign='center';
+        const origin=Number(h.time_origin_seconds||0), duration=Number(h.duration_seconds);
+        for(let i=0;i<=4;i++){const frac=i/4,x=g.left+frac*w;ctx.fillText(formatTime(origin+frac*duration),x,g.top+hh+18);}
+    }
+    function drawLTSAOverlay() {
+        const canvas=$('ltsaOverlay'),g=ltsaGeometry(canvas),ctx=g.ctx;ctx.clearRect(0,0,g.width,g.height);
+        if(!ltsa.header)return;
+        const origin=Number(ltsa.header.time_origin_seconds||0),duration=Number(ltsa.header.duration_seconds);
+        if(!(duration>0))return;
+        if(app.meta){
+            const x0=g.left+(app.start-origin)/duration*g.w,x1=g.left+(app.start+app.span-origin)/duration*g.w;
+            const lo=clamp(Math.min(x0,x1),g.left,g.left+g.w),hi=clamp(Math.max(x0,x1),g.left,g.left+g.w);
+            if(hi>lo){ctx.fillStyle='rgba(255,255,255,.12)';ctx.fillRect(lo,g.top,hi-lo,g.h);ctx.strokeStyle='rgba(255,255,255,.65)';ctx.strokeRect(lo,g.top,hi-lo,g.h);}
+            const cx=g.left+(app.cursor-origin)/duration*g.w;
+            if(cx>=g.left&&cx<=g.left+g.w){ctx.strokeStyle='#ffdb69';ctx.beginPath();ctx.moveTo(cx,g.top);ctx.lineTo(cx,g.top+g.h);ctx.stroke();}
+        }
+    }
+    function saveBlob(blob, name) {
+        const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    }
+    function exportLTSAConfig() {
+        const config=currentLTSAConfig(),name=(app.file?.name||'ltsa').replace(/\.[^.]+$/,'')+'.ltsa_config.json';
+        saveBlob(new Blob([JSON.stringify(config,null,2)+'\n'],{type:'application/json'}),name);
+        ltsaSetStatus('Exported LTSA configuration JSON.',false,true);
+    }
+    async function importLTSAConfigFile(file) {
+        if(file.size>1048576)throw Error('LTSA config JSON is unexpectedly large.');
+        const config=JSON.parse(await file.text());applyLTSAConfig(config);ltsaSetStatus('Imported LTSA configuration.',false,true);
+    }
+    function exportLTSAFile() {
+        if(!ltsa.data||!ltsa.header)throw Error('Compute or import an LTSA first.');
+        const header={...ltsa.header,config:currentLTSAConfig()},headerBytes=new TextEncoder().encode(JSON.stringify(header));
+        const len=new ArrayBuffer(4);new DataView(len).setUint32(0,headerBytes.length,true);
+        let payload=new Uint8Array(ltsa.data.buffer,ltsa.data.byteOffset,ltsa.data.byteLength);
+        if(!LITTLE_ENDIAN){const converted=new ArrayBuffer(ltsa.data.byteLength),view=new DataView(converted);for(let i=0;i<ltsa.data.length;i++)view.setFloat32(i*4,ltsa.data[i],true);payload=new Uint8Array(converted);}
+        const magic=new Uint8Array([76,84,83,65,49,0,0,0]),name=(app.file?.name||ltsa.header.source?.name||'recording').replace(/\.[^.]+$/,'')+'.ltsa';
+        saveBlob(new Blob([magic,len,headerBytes,payload],{type:'application/octet-stream'}),name);ltsaSetStatus('Exported numeric .ltsa data.',false,true);
+    }
+    async function importLTSAFile(file) {
+        if(file.size<12)throw Error('LTSA file is truncated.');
+        const prefix=new Uint8Array(await file.slice(0,12).arrayBuffer()),magic=[76,84,83,65,49,0,0,0];
+        if(magic.some((v,i)=>prefix[i]!==v))throw Error('Not a util_many .ltsa file.');
+        const headerLength=new DataView(prefix.buffer).getUint32(8,true);
+        if(headerLength>16*1048576||12+headerLength>file.size)throw Error('Invalid LTSA header length.');
+        const header=JSON.parse(new TextDecoder().decode(await file.slice(12,12+headerLength).arrayBuffer()));
+        if(header.format!==LTSA_FORMAT||Number(header.version)!==LTSA_VERSION)throw Error('Unsupported LTSA format/version.');
+        const count=Number(header.time_bins)*Number(header.frequency_bins),payloadBytes=count*4;
+        if(!Number.isSafeInteger(count)||count<=0||payloadBytes>LTSA_IMPORT_MAX_BYTES)throw Error('LTSA matrix exceeds the browser import safety limit.');
+        if(file.size!==12+headerLength+payloadBytes)throw Error('LTSA payload size does not match its header.');
+        const raw=await file.slice(12+headerLength).arrayBuffer();
+        let data;
+        if(LITTLE_ENDIAN)data=new Float32Array(raw);
+        else{data=new Float32Array(count);const view=new DataView(raw);for(let i=0;i<count;i++)data[i]=view.getFloat32(i*4,true);}
+        ltsa.serial++;ltsa.running=false;ltsa.data=data;ltsa.header=header;ltsa.lastProgress=1;
+        if(header.config)try{applyLTSAConfig(header.config);}catch{}
+        $('ltsaViewFreqMin').value=String(Number(header.frequency_start_hz));$('ltsaViewFreqMax').value=String(Number(header.frequency_end_hz));
+        drawLTSABase();drawLTSAOverlay();updateLTSAControls();
+        const mismatch=app.meta&&(Math.abs(Number(header.sample_rate)-app.meta.sampleRate)>1e-6||Math.abs(Number(header.full_recording_duration_seconds||header.duration_seconds)-app.meta.duration)>Math.max(.01,app.meta.duration*.001));
+        ltsaSetStatus('Imported '+file.name+' · '+Number(header.time_bins).toLocaleString()+' × '+Number(header.frequency_bins).toLocaleString()+' values.'+(mismatch?' Warning: LTSA metadata does not match the currently loaded audio.':''),mismatch,!mismatch);
     }
     const MIN_TRACK_HEIGHT = 10;
     function sourceKey(marker) {
@@ -1853,6 +2276,7 @@ self.onmessage = async ({ data: m }) => {
         pause();
         app.analysis?.close();
         app.playback?.close();
+        resetLTSA();
         app.analysis = app.playback = null;
         app.file = null;
         app.meta = null;
@@ -1911,6 +2335,8 @@ self.onmessage = async ({ data: m }) => {
             }
             if (meta.channels > 1)
                 $('channel').append(new Option('Mix (average)', '-1'));
+            populateLTSAChannels(meta.channels);
+            $('ltsaFreqMax').placeholder = 'Nyquist ' + fmt(meta.sampleRate / 2, 0);
             $('displayFreqMin').value = 0;
             $('displayFreqMax').value = meta.sampleRate / 2;
             $('highPassHz').max = $('lowPassHz').max = meta.sampleRate / 2;
@@ -1920,6 +2346,7 @@ self.onmessage = async ({ data: m }) => {
             $('fileInfo').textContent = file.name + ' · ' + fmt(file.size / 1048576, 2) + ' MiB · ' + meta.format + ' · ' + meta.channels + ' channel' + (meta.channels > 1 ? 's' : '') + ' · Native ' + meta.sampleRate.toLocaleString() + ' Hz · Nyquist ' + (meta.sampleRate / 2).toLocaleString() + ' Hz · ' + formatTime(meta.duration);
             $('outputInfo').textContent = 'Native analysis: ' + meta.sampleRate.toLocaleString() + ' Hz. Press Play to initialize playback output.';
             ready(true);
+            updateLTSAControls();
             updateFreqControls();
             setView(0, app.span);
             updateTransport();
@@ -2148,6 +2575,7 @@ self.onmessage = async ({ data: m }) => {
         $('scrubSlider').value = app.cursor;
         if (document.activeElement !== $('gotoInput'))
             $('gotoInput').value = fmt(app.cursor);
+        drawLTSAOverlay();
     }
     function setView(start, span, zoomHint = null) {
         if (!app.meta)
@@ -2166,6 +2594,7 @@ self.onmessage = async ({ data: m }) => {
         if (changed && $('visibleOnly').checked)
             app.markers.size < 10000 ? renderMarkerTable() : scheduleMarkerTable();
         if (changed || !app.lastRender) requestRender();
+        if (changed) drawLTSAOverlay();
     }
     function zoom(factor, anchor = app.start + app.span / 2) {
         if (!app.meta)
@@ -2449,6 +2878,12 @@ self.onmessage = async ({ data: m }) => {
             const changed = app.overview.revision !== m.revision;
             updateOverviewControls(m);
             if (m.complete && changed) requestRender();
+        }
+        else if (m.event === 'ltsaProgress') {
+            if (!ltsa.running || Number(m.jobId) !== ltsa.serial) return;
+            ltsa.lastProgress = clamp(Number(m.progress) || 0, 0, 1);
+            $('ltsaProgress').value = ltsa.lastProgress;
+            $('ltsaProgressText').textContent = Math.round(ltsa.lastProgress * 100) + '% · ' + Number(m.windows || 0).toLocaleString() + ' / ' + Number(m.totalWindows || 0).toLocaleString() + ' FFT windows';
         }
         else if (m.event === 'overviewError') {
             if (m.channel !== channel() || m.fft !== Number($('fftSize').value) || m.filterKey !== audioFilterKey()) return;
@@ -2903,6 +3338,7 @@ self.onmessage = async ({ data: m }) => {
             if (source) drawLabelTrackBase(plot.querySelector('canvas:not(.overlay)'), source);
         }
         paintOverlays();
+        drawLTSAOverlay();
     }
     function tagColor(key) {
         let hash = 0;
@@ -4070,6 +4506,22 @@ self.onmessage = async ({ data: m }) => {
     handle('panLeft', 'click', () => setView(app.start - app.span * .8, app.span));
     handle('panRight', 'click', () => setView(app.start + app.span * .8, app.span));
     handle('fullBandBtn', 'click', () => { $('displayFreqMin').value = 0; $('displayFreqMax').value = app.meta.sampleRate / 2; requestRender(); });
+    for (const id of ['ltsaFft','ltsaOverlap','ltsaAverage','ltsaChannel','ltsaFreqMin','ltsaFreqMax'])
+        handle(id, 'change', updateLTSAEstimate);
+    for (const id of ['ltsaViewFreqMin','ltsaViewFreqMax','ltsaDbMin','ltsaDbMax','ltsaColor'])
+        handle(id, 'change', drawLTSABase);
+    handle('ltsaPreview','click',()=>runLTSA('preview'));
+    handle('ltsaBuildFull','click',()=>runLTSA('full'));
+    handle('ltsaCancel','click',cancelLTSA);
+    handle('ltsaExportConfig','click',exportLTSAConfig);
+    handle('ltsaConfigImport','change',async()=>{const file=$('ltsaConfigImport').files[0];$('ltsaConfigImport').value='';if(file)await importLTSAConfigFile(file);});
+    handle('ltsaExport','click',exportLTSAFile);
+    handle('ltsaImport','change',async()=>{const file=$('ltsaImport').files[0];$('ltsaImport').value='';if(file)await importLTSAFile(file);});
+    handle('ltsaOverlay','pointerdown',e=>{if(!ltsa.header)return;const g=ltsaGeometry($('ltsaOverlay')),box=$('ltsaOverlay').getBoundingClientRect(),x=e.clientX-box.left;
+        if(x<g.left||x>g.left+g.w)return;const origin=Number(ltsa.header.time_origin_seconds||0),time=origin+clamp((x-g.left)/g.w,0,1)*Number(ltsa.header.duration_seconds);
+        $('ltsaHover').textContent='Jumped to '+formatTime(time);if(app.meta){seek(time,false);setView(time-app.span/2,app.span);}});
+    handle('ltsaOverlay','pointermove',e=>{if(!ltsa.header)return;const g=ltsaGeometry($('ltsaOverlay')),box=$('ltsaOverlay').getBoundingClientRect(),x=e.clientX-box.left;
+        if(x<g.left||x>g.left+g.w){$('ltsaHover').textContent='';return;}const origin=Number(ltsa.header.time_origin_seconds||0),time=origin+clamp((x-g.left)/g.w,0,1)*Number(ltsa.header.duration_seconds);$('ltsaHover').textContent=formatTime(time);});
     for (const id of ['displayFreqMin', 'displayFreqMax', 'dbMin', 'dbMax', 'colorMap'])
         handle(id, 'change', requestRender);
     handle('fftSize', 'change', () => {
@@ -4090,6 +4542,8 @@ self.onmessage = async ({ data: m }) => {
         const was = app.playing;
         pause();
         app.viewChannel = channel();
+        if (!ltsa.running && !ltsa.data && Array.from($('ltsaChannel').options).some(o => o.value === String(channel()))) $('ltsaChannel').value = String(channel());
+        updateLTSAEstimate();
         app.lastRender = null;
         updateOverviewControls({ active: false, progress: 0 });
         requestRender();
@@ -4277,11 +4731,12 @@ self.onmessage = async ({ data: m }) => {
         e.preventDefault();
         document.body.classList.remove('dragging');
         try {
-            const files = Array.from(e.dataTransfer?.files || []), annotations = files.filter(f => /\.(json|csv|txt)$/i.test(f.name)), audio = files.filter(f => !annotations.includes(f));
-            if (audio.length > 1)
-                throw Error('Drop one audio recording at a time.');
+            const files = Array.from(e.dataTransfer?.files || []), ltsaFiles = files.filter(f => /\.ltsa$/i.test(f.name)), annotations = files.filter(f => /\.(json|csv|txt)$/i.test(f.name)), audio = files.filter(f => !annotations.includes(f) && !ltsaFiles.includes(f));
+            if (audio.length > 1 || ltsaFiles.length > 1)
+                throw Error('Drop at most one audio recording and one .ltsa file at a time.');
             if (audio.length && !await loadAudio(audio[0]))
                 return;
+            if (ltsaFiles.length) await importLTSAFile(ltsaFiles[0]);
             if (annotations.length)
                 await importFiles(annotations, true);
         }
@@ -4296,11 +4751,12 @@ self.onmessage = async ({ data: m }) => {
         }
     });
     window.addEventListener('pagehide', e => { cancelZoomPrefetch(); pause(); if (e.persisted)
-        return; app.analysis?.close(); app.playback?.close(); app.context?.close(); URL.revokeObjectURL(workerURL); });
+        return; app.analysis?.close(); app.playback?.close(); ltsa.worker?.close(); app.context?.close(); URL.revokeObjectURL(workerURL); });
     app.resizeObserver = new ResizeObserver(entries => {
         paintAll();
         // Only a spectrogram size change alters FFT pixel resolution. Avoid
         // starting a new worker render on every pixel of splitter dragging.
+        if (entries.some(entry => entry.target === $('ltsaPlot'))) { drawLTSABase(); drawLTSAOverlay(); }
         if (app.meta && entries.some(entry => entry.target === $('specPlot'))) {
             clearTimeout(app.plotRenderTimer);
             app.plotRenderTimer = setTimeout(() => {
@@ -4311,6 +4767,7 @@ self.onmessage = async ({ data: m }) => {
     });
     for (const plot of $('plotStack').querySelectorAll(':scope > .plot'))
         app.resizeObserver.observe(plot);
+    app.resizeObserver.observe($('ltsaPlot'));
     rebuildPlotSeparators();
     function inspectMarkers(limit) {
         const markers = [];
@@ -4328,7 +4785,7 @@ self.onmessage = async ({ data: m }) => {
         tracks: Array.from(app.importSources.values()).filter(source => source.mode === 'stack')
             .map(source => ({ id: source.id, filename: source.filename,
                 count: filteredMarkerIndex('track:' + source.id).items.length })),
-    }), inspect: (options = {}) => ({ meta: app.meta ? { ...app.meta } : null, file: app.file?.name, start: app.start, span: app.span, cursor: app.cursor, playing: app.playing, renderPending: app.renderPending, audioFilter: app.audioFilter ? { ...app.audioFilter, taps: app.filterTaps } : null, render: app.lastRender ? { start: app.lastRender.start, span: app.lastRender.span, fmin: app.lastRender.fmin, fmax: app.lastRender.fmax, scale: app.lastRender.scale, mode: app.lastRender.mode, fft: app.lastRender.fft, elapsedMs: app.lastRender.elapsedMs } : null, markerCount: app.markers.size, markersTruncated: app.markers.size > 50000 && !options.allMarkers, markers: inspectMarkers(options.allMarkers ? app.markers.size : 50000), sources: Array.from(app.importSources.values(), source => ({ ...source })), tags: Array.from(app.tags, ([key, v]) => ({ key, ...v })), undo: app.undo.length, redo: app.redo.length, selected: app.selected, overview: { ...app.overview }, outputRate: app.context?.sampleRate || null, scheduledNodes: app.nodes.size }), readNativeSamples: (start, count, ch = 0) => app.analysis.call('read', { start, count, channel: ch }).then(a => Array.from(a)), readFilteredSamples: (start, count, ch = 0) => app.analysis.call('readFiltered', { start, count, channel: ch }).then(a => Array.from(a)), frequencyAxis: () => ({ scale: currentScale(), ...getDisplayFreqRange() }), frequencyPosition: hz => scaleFraction(hz), frequencyAtPosition: position => fractionHz(position), readSpectrum: (time, fft = 4096, ch = 0) => app.analysis.call('spectrum', { time, fft, channel: ch }).then(r => ({ sampleRate: r.sampleRate, db: Array.from(r.db) })), diagnostics: async () => ({ analysis: await app.analysis.call('stats'), playback: await app.playback.call('stats'), historyBytes: app.historyBytes }), audioRMS: () => {
+    }), inspect: (options = {}) => ({ meta: app.meta ? { ...app.meta } : null, file: app.file?.name, start: app.start, span: app.span, cursor: app.cursor, playing: app.playing, renderPending: app.renderPending, audioFilter: app.audioFilter ? { ...app.audioFilter, taps: app.filterTaps } : null, render: app.lastRender ? { start: app.lastRender.start, span: app.lastRender.span, fmin: app.lastRender.fmin, fmax: app.lastRender.fmax, scale: app.lastRender.scale, mode: app.lastRender.mode, fft: app.lastRender.fft, elapsedMs: app.lastRender.elapsedMs } : null, markerCount: app.markers.size, markersTruncated: app.markers.size > 50000 && !options.allMarkers, markers: inspectMarkers(options.allMarkers ? app.markers.size : 50000), sources: Array.from(app.importSources.values(), source => ({ ...source })), tags: Array.from(app.tags, ([key, v]) => ({ key, ...v })), undo: app.undo.length, redo: app.redo.length, selected: app.selected, overview: { ...app.overview }, ltsa: ltsa.header ? { running: ltsa.running, progress: ltsa.lastProgress, header: { ...ltsa.header }, values: ltsa.data?.length || 0 } : { running: ltsa.running, progress: ltsa.lastProgress, header: null, values: 0 }, outputRate: app.context?.sampleRate || null, scheduledNodes: app.nodes.size }), readNativeSamples: (start, count, ch = 0) => app.analysis.call('read', { start, count, channel: ch }).then(a => Array.from(a)), readFilteredSamples: (start, count, ch = 0) => app.analysis.call('readFiltered', { start, count, channel: ch }).then(a => Array.from(a)), frequencyAxis: () => ({ scale: currentScale(), ...getDisplayFreqRange() }), frequencyPosition: hz => scaleFraction(hz), frequencyAtPosition: position => fractionHz(position), readSpectrum: (time, fft = 4096, ch = 0) => app.analysis.call('spectrum', { time, fft, channel: ch }).then(r => ({ sampleRate: r.sampleRate, db: Array.from(r.db) })), diagnostics: async () => ({ analysis: await app.analysis.call('stats'), playback: await app.playback.call('stats'), historyBytes: app.historyBytes }), audioRMS: () => {
             if (!app.analyser)
                 return 0;
             const a = new Float32Array(app.analyser.fftSize);
@@ -4337,6 +4794,8 @@ self.onmessage = async ({ data: m }) => {
         } });
     refreshAnnotations();
     paintAll();
+    drawLTSABase();
+    drawLTSAOverlay();
 })();
 </script>
 </body>
