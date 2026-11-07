@@ -1,0 +1,35 @@
+name: Audio annotator LTSA regression verification
+
+on:
+  push:
+    branches:
+      - feature/ltsa-audio-annotator
+    paths:
+      - audio_annotatorv2.html
+      - ltsa_batch.py
+      - sample/ltsa_config.json
+      - tests/audio_annotator_v2/**
+      - .github/workflows/ltsa-regression-temp.yml
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: |
+          python -m pip install --disable-pip-version-check numpy soundfile playwright
+          python -m playwright install --with-deps chromium
+      - name: Check embedded JavaScript syntax
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const html = fs.readFileSync('audio_annotatorv2.html', 'utf8');
+          const scripts = [...html.matchAll(/<script(?:[^>]*)>([\s\S]*?)<\/script>/g)].map(m => m[1]);
+          scripts.forEach((s, i) => { new Function(s); console.log('script', i, 'ok'); });
+          NODE
+      - name: Run full non-large annotator suite
+        run: python tests/audio_annotator_v2/run.py --suite all
