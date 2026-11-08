@@ -1,0 +1,30 @@
+{
+  "format": "util_many_ltsa_config",
+  "version": 1,
+  "analysis": {
+    "fft_size": 1024,
+    "window": "hann",
+    "overlap": 0.5,
+    "average_seconds": 10.0,
+    "channel": 0,
+    "frequency_min_hz": 5.0,
+    "frequency_max_hz": 110.0
+  },
+  "processing": {
+    "analysis_sample_rate_hz": 256,
+    "backend": "auto",
+    "memory_fraction": 0.75,
+    "gpu_memory_fraction": 0.75,
+    "chunk_seconds": null,
+    "fft_batch_windows": null
+  },
+  "display": {
+    "db_min": -115.0,
+    "db_max": -45.0,
+    "colormap": "ocean"
+  },
+  "detection": {
+    "enabled": false,
+    "profile": "omuras_whale"
+  }
+}
