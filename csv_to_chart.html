@@ -271,9 +271,13 @@
     // selected X column once. Redraws never re-run the detection.
     const DATE_SAMPLE_LIMIT = 96;
 
-    function dateHeaderScore(header) {
-      const h = String(header || '').replace(/([a-z])([A-Z])/g, '$1 $2')
+    function dateHeaderWords(header) {
+      return String(header || '').replace(/([a-z])([A-Z])/g, '$1 $2')
         .replace(/[_\-]+/g, ' ').toLowerCase();
+    }
+
+    function dateHeaderScore(header) {
+      const h = dateHeaderWords(header);
       if (/\b(?:timestamp|time stamp|datetime|date time|unix|epoch)\b/.test(h)) return 22;
       if (/\b(?:date|time|utc|gmt|recorded|observed|measured|created|updated)\b/.test(h)) return 14;
       if (/\b(?:id|identifier|index|count|quantity|value|amount|price|latitude|longitude)\b/.test(h)) return -12;
@@ -281,8 +285,7 @@
     }
 
     function epochHeader(header) {
-      return /\b(?:epoch|unix|timestamp|time.?stamp)\b/i
-        .test(String(header || '').replace(/[_\-]+/g, ' '));
+      return /(?:epoch|unix|timestamp|time.?stamp)/.test(dateHeaderWords(header));
     }
 
     function makeDateTimestamp(year, month, day, hour, minute, second, millis, zone, assumeUTC) {
@@ -337,8 +340,11 @@
         if (m) { month = m[1]; day = Number(m[2]); year = Number(m[3]); }
       }
       if (m) {
-        const names = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
-        const idx = names.indexOf(month.toLowerCase().slice(0, 3));
+        const names = ['january','february','march','april','may','june',
+          'july','august','september','october','november','december'];
+        const key = month.toLowerCase();
+        const idx = names.findIndex(name => key === name || key === name.slice(0, 3)
+          || (name === 'september' && key === 'sept'));
         return idx < 0 ? null : makeDateTimestamp(year, idx + 1, day, 0, 0, 0, 0, '', assumeUTC);
       }
 
@@ -349,7 +355,7 @@
       }
       if (allowEpoch && /^(?:\d{10}(?:\.\d+)?|\d{13})$/.test(s)) {
         const ms = /^\d{13}$/.test(s) ? Number(s) : Number(s) * 1000;
-        return ms >= Date.UTC(2000, 0, 1) && ms <= Date.UTC(2100, 0, 1) ? ms : null;
+        return ms >= Date.UTC(1970, 0, 1) && ms <= Date.UTC(2100, 0, 1) ? ms : null;
       }
       return null;
     }
@@ -361,7 +367,7 @@
     }
 
     function inferDateOrder(rows, indices, column, header) {
-      const h = String(header || '').toLowerCase();
+      const h = dateHeaderWords(header);
       if (/\bmdy\b|month.?first|us.?date/.test(h)) return 'MDY';
       if (/\bdmy\b|day.?first|uk.?date/.test(h)) return 'DMY';
       let dmy = 0, mdy = 0;
@@ -382,8 +388,8 @@
         const order = inferDateOrder(rows, indices, col, header);
         const allowEpoch = epochHeader(header);
         const allowCompact = dateHeaderScore(header) > 0;
-        const assumeUTC = /\b(?:utc|gmt)\b/i.test(String(header || '').replace(/[_\-]+/g, ' '));
-        let nonempty = 0, valid = 0, iso = 0, timed = 0;
+        const assumeUTC = /\b(?:utc|gmt)\b/.test(dateHeaderWords(header));
+        let nonempty = 0, valid = 0, iso = 0, timed = 0, localeDates = 0;
         const unique = new Set();
         for (const i of indices) {
           const value = String(rows[i][col] ?? '').trim();
@@ -394,6 +400,7 @@
           valid++;
           unique.add(ts);
           if (/^\d{4}-\d{1,2}-\d{1,2}/.test(value)) iso++;
+          if (/^\d{1,2}[/. -]\d{1,2}[/. -]\d{4}/.test(value)) localeDates++;
           if (/[T ]\d{1,2}:\d{2}/.test(value) ||
               (allowEpoch && /^(?:\d{10}(?:\.\d+)?|\d{13})$/.test(value))) timed++;
         }
@@ -404,9 +411,10 @@
         const score = 60 * accuracy + 18 * coverage + dateHeaderScore(header)
           + 7 * iso / valid + 6 * timed / valid
           + 5 * unique.size / valid - 0.2 * col;
-        const format = allowEpoch && timed === valid && iso === 0 ? 'Unix epoch' :
+        const family = allowEpoch && timed === valid && iso === 0 ? 'Unix epoch' :
           iso === valid ? (timed ? 'ISO 8601 datetime' : 'ISO 8601 date') :
           timed ? 'Date/time' : 'Date';
+        const format = localeDates ? family + ' (' + order + ')' : family;
         return { index: col, score, format, order, allowEpoch, assumeUTC, allowCompact };
       });
     }
