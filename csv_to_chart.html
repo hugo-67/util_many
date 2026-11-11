@@ -12,7 +12,8 @@
     - Drag-and-drop or file-picker CSV import
     - Proper RFC 4180 CSV parsing (handles quoted fields)
     - Infers full datetime columns and split date+clock pairs from bounded samples
-    - Supports ISO 8601, locale dates, epochs, Excel serials, and manual overrides
+    - Supports ISO 8601, date-only, locale dates, epochs and Excel serials
+    - Prioritizes full datetime and date+time pairs over date-only fields
     - Dual renderer:
         • Plotly 3.6.0  — default for files < 500 KB (rich interactivity)
         • ECharts 6.1.0 — default for files ≥ 500 KB (canvas large-data mode)
@@ -46,6 +47,9 @@
     ECHARTS_THRESHOLD_BYTES = 500 * 1024  (500 KB) — edit to adjust auto-switch.
 
   CHANGELOG:
+    v2.5  2026-11-12  Explicitly parse and rank date-only vs full datetime:
+                    full timestamps win when reliable, date-only remains
+                    a usable chronological axis (midnight, not category).
     v2.4  2026-11-12  Column-wide inference, fractional/micro/nano epochs,
                     12-hour clocks and month names, Excel serial dates,
                     split date+time pairing, ambiguity override and explanation.
@@ -494,8 +498,11 @@
         valid++;
         unique.add(ts);
         if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(value) || /^\d{8}T?\d{6}/.test(value)) iso++;
+        // Date-only is valid but less informative than a full timestamp.
+        // Count time precision per successfully parsed value, never per header.
         if (/[T ]\d{1,2}:\d{2}/.test(value) || /^\d{8}T?\d{6}/.test(value) ||
-            (allowEpoch && /^\d{9,10}(?:\.\d+)?$|^\d{12,13}$|^\d{15,16}$|^\d{18,19}$/.test(value))) timed++;
+            (allowEpoch && /^(?:\d{9,10}(?:\.\d+)?|\d{12,13}|\d{15,16}|\d{18,19})$/.test(value)) ||
+            (allowExcel && /^\d{4,5}\.\d+/.test(value))) timed++;
         if (/^\d{1,2}[\/. -]\d{1,2}[\/. -]\d{4}/.test(value)) locale++;
         if (/^\d+(?:\.\d+)?$/.test(value)) numeric++;
       }
@@ -517,12 +524,16 @@
         hint + 8 * iso / valid + 6 * timed / valid + 6 * temporal.chronology -
         Math.min(3, col * 0.06);
       if (numericOnly && hint <= 0) score -= 27;
+      // A column needs real time components in most valid entries to rank
+      // as datetime. Mixed/partially malformed date-only columns still parse.
+      const hasTime = timed / valid >= 0.8;
+      const precision = hasTime ? 2 : 1;
       const family = numericOnly ?
         (allowEpoch && /^\d{9,10}(?:\.\d+)?$|^\d{12,13}$|^\d{15,16}$|^\d{18,19}$/.test(String(rows[indices.find(i => String(rows[i][col] ?? '').trim())][col]).trim()) ? 'Unix epoch' : 'Excel serial date') :
-        iso === valid ? (timed ? 'ISO datetime' : 'ISO date') :
-        timed ? 'Date and time' : 'Date';
+        iso === valid ? (hasTime ? 'ISO datetime' : 'ISO date') :
+        hasTime ? 'Date and time' : 'Date';
       const format = family + (locale ? ' (' + order + ')' : '');
-      return { type: 'single', index: col, cols: [col], score, format, order,
+      return { type: 'single', index: col, cols: [col], score, precision, format, order,
         allowEpoch, assumeUTC, allowCompact, allowExcel,
         accuracy, coverage, diversity, chronology: temporal.chronology,
         ambiguous: locale > 0 && !indices.some(i => {
@@ -567,7 +578,7 @@
       });
       const times = headers.map((_, col) => timeColumn(headers, rows, indices, col)).filter(Boolean);
       // Pair a date-only column with a separate clock column (usually adjacent).
-      const days = result.filter(v => v && !/datetime|and time|epoch/i.test(v.format));
+      const days = result.filter(v => v && v.precision === 1);
       const pairs = [];
       for (const date of days.slice(0, 5)) for (const clock of times.slice(0, 5)) {
         if (date.index === clock.index) continue;
@@ -581,7 +592,7 @@
         }
         if (nonempty < 2 || valid / nonempty < 0.85) continue;
         pairs.push({ ...date, type: 'pair', cols: [date.index, clock.index],
-          timeIndex: clock.index, format: 'Combined date + time',
+          timeIndex: clock.index, precision: 2, format: 'Combined date + time',
           score: date.score + 11 + clock.accuracy * 5 - Math.min(5, Math.abs(clock.index - date.index)) });
       }
       return { singles: result, pairs };
@@ -593,8 +604,11 @@
       const found = analyzeDateColumns(parsedHeaders, parsedRows);
       dateColumnCandidates = found.singles;
       datePairs = found.pairs;
+      // Choose reliable full datetimes before dates, irrespective of header
+      // order or small score differences. Among equal precision, use quality.
       const ranked = [...found.singles.filter(Boolean), ...found.pairs]
-        .sort((a, b) => b.score - a.score || a.index - b.index);
+        .sort((a, b) => b.precision - a.precision ||
+          b.score - a.score || a.index - b.index);
       bestDateColumn = ranked[0] || null;
       sel.innerHTML = '';
       function labelFor(candidate) {
