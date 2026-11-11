@@ -348,7 +348,7 @@
           Number(s.slice(6, 8)), 0, 0, 0, 0, '', assumeUTC);
       }
       if (allowEpoch && /^(?:\d{10}(?:\.\d+)?|\d{13})$/.test(s)) {
-        const ms = s.length === 13 ? Number(s) : Number(s) * 1000;
+        const ms = /^\d{13}$/.test(s) ? Number(s) : Number(s) * 1000;
         return ms >= Date.UTC(2000, 0, 1) && ms <= Date.UTC(2100, 0, 1) ? ms : null;
       }
       return null;
