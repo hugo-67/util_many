@@ -184,7 +184,7 @@ test('table edits recompute date detection and normalize changed values', () => 
 test('microsecond and nanosecond Unix timestamps and Excel serial values', () => {
   assert.equal(parse('1735689600000000', 'DMY', true), Date.UTC(2025, 0, 1));
   assert.equal(parse('1735689600000000000', 'DMY', true), Date.UTC(2025, 0, 1));
-  assert.equal(parse('45658', 'DMY', false, false, false, true), Date.UTC(2024, 11, 31));
+  assert.equal(parse('45658', 'DMY', false, false, false, true), Date.UTC(2025, 0, 1));
   assert.equal(parse('45292.5', 'DMY', false, false, false, true), Date.UTC(2024, 0, 1, 12));
 });
 test('named months, RFC style weekday, 12-hour clock and compact ISO', () => {
