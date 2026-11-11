@@ -390,7 +390,7 @@
 
       // English month names with optional clock: '12 Nov 2026 3:04 PM',
       // 'November 12, 2026', '2026-Nov-12', RFC 2822 weekday prefix.
-      const cleaned = s.replace(/^(?:mon|tue|wed|thu|fri|sat|sun)(?:day)?[,]?\s+/i, '');
+      const cleaned = s.replace(/^(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)[,]?\s+/i, '');
       let d, mo, y, tail;
       m = /^(\d{1,2})[ ,\-]+([a-z]{3,9})[ ,\-]+(\d{4})(?:[ T](.+))?$/i.exec(cleaned);
       if (m) { d = +m[1]; mo = m[2]; y = +m[3]; tail = m[4]; }
@@ -509,7 +509,8 @@
           coverage < 0.18 || (valid > 5 && unique.size < 2)) return null;
       // Bare numeric column: require strong chronological evidence and
       // widely spaced timestamp values or an explicit semantically apt header.
-      if (numericOnly && hint <= 0 &&
+      if (numericOnly && hint < 0) return null;
+      if (numericOnly && hint === 0 &&
           (coverage < 0.95 || accuracy < 0.98 || diversity < 0.9 ||
            temporal.chronology < 0.9 || temporal.span < 1000)) return null;
       let score = 65 * accuracy + 20 * coverage + 12 * diversity +
