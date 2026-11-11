@@ -657,9 +657,7 @@
 
     function onDateOrderChange() {
       if (!parsedRows.length) return;
-      const sel = document.getElementById('xColumnSel').value;
-      populateXColumnOptions();
-      document.getElementById('xColumnSel').value = sel;
+      populateXColumnOptions(); // preserves valid selection; otherwise falls back to auto
       hiddenCols.clear();
       updateXAxis();
       buildColToggles();
