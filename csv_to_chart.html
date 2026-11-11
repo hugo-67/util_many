@@ -11,8 +11,8 @@
   KEY FEATURES:
     - Drag-and-drop or file-picker CSV import
     - Proper RFC 4180 CSV parsing (handles quoted fields)
-    - Auto-selects best datetime X column from sampled data and column headers
-    - Supports ISO 8601 / common dates / Unix epochs, with X-axis override
+    - Infers full datetime columns and split date+clock pairs from bounded samples
+    - Supports ISO 8601, locale dates, epochs, Excel serials, and manual overrides
     - Dual renderer:
         • Plotly 3.6.0  — default for files < 500 KB (rich interactivity)
         • ECharts 6.1.0 — default for files ≥ 500 KB (canvas large-data mode)
@@ -46,6 +46,9 @@
     ECHARTS_THRESHOLD_BYTES = 500 * 1024  (500 KB) — edit to adjust auto-switch.
 
   CHANGELOG:
+    v2.4  2026-11-12  Column-wide inference, fractional/micro/nano epochs,
+                    12-hour clocks and month names, Excel serial dates,
+                    split date+time pairing, ambiguity override and explanation.
     v2.3  2026-11-12  Header-aware, sampled date/time column selection;
                     strict ISO/common date/epoch parsing, X-axis override,
                     cached normalized timestamps for both renderers.
@@ -140,6 +143,12 @@
     <select id="xColumnSel" onchange="onXColumnChange()" aria-label="X-axis column">
       <option value="auto">Auto</option>
     </select>
+    <label for="dateOrderSel" style="font-size:0.85em">Date order:</label>
+    <select id="dateOrderSel" onchange="onDateOrderChange()" aria-label="Ambiguous date order">
+      <option value="auto">Auto</option>
+      <option value="DMY">Day / Month / Year</option>
+      <option value="MDY">Month / Day / Year</option>
+    </select>
 
     <span class="sep">|</span>
 
@@ -172,6 +181,7 @@
     <span id="location-warn"></span>
   </div>
 
+  <div id="datetime-detection" role="status" style="font-size:0.83em;color:#555;margin:0.1em 0 0.5em"></div>
   <div id="col-toggles"></div>
   <div id="table-wrapper"><div id="table-container"></div></div>
   <div id="chart"></div>
@@ -189,6 +199,8 @@
     let xDataCache = [];
     let dateColumnCandidates = [];
     let bestDateColumn = null;
+    let datePairs = [];
+    let xAxisTitle = '';
     let activeRenderer = "plotly";
     let lastFileBytes = 0;
     let echart = null;
@@ -266,10 +278,17 @@
     }
 
 
-    // ── Date/time detection ───────────────────────────────────────────────────
-    // Examine up to 96 spread-out rows per column, then normalize only the
-    // selected X column once. Redraws never re-run the detection.
-    const DATE_SAMPLE_LIMIT = 96;
+
+    // ── Adaptive, header-aware date/time inference ───────────────────────────
+    // Keep the costly scan bounded in row count. Formatting is inferred across
+    // the column instead of applying Date.parse to one arbitrary cell.
+    const DATE_SAMPLE_LIMIT = 160;
+    const MONTHS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+    const MONTH_NAMES = ['january','february','march','april','may','june',
+      'july','august','september','october','november','december'];
+    let selectedX = null;
+    let xColumnIndices = new Set([0]);
+    let detectionDetails = '';
 
     function dateHeaderWords(header) {
       return String(header || '').replace(/([a-z])([A-Z])/g, '$1 $2')
@@ -278,9 +297,11 @@
 
     function dateHeaderScore(header) {
       const h = dateHeaderWords(header);
-      if (/\b(?:timestamp|time stamp|datetime|date time|unix|epoch)\b/.test(h)) return 22;
-      if (/\b(?:date|time|utc|gmt|recorded|observed|measured|created|updated)\b/.test(h)) return 14;
-      if (/\b(?:id|identifier|index|count|quantity|value|amount|price|latitude|longitude)\b/.test(h)) return -12;
+      if (/\b(?:id|identifier|index|row|count|amount|price|volume|latitude|longitude|duration|elapsed|interval)\b/.test(h)) return -34;
+      if (/\b(?:timestamp|time stamp|datetime|date time|epoch|unix)\b/.test(h)) return 34;
+      if (/\b(?:date|utc|gmt|recorded|observed|created|updated|collected|start time|end time)\b/.test(h)) return 23;
+      if (/\btime\b/.test(h)) return 12;
+      if (/^(?:x|t)$/i.test(h)) return 5;
       return 0;
     }
 
@@ -288,177 +309,356 @@
       return /(?:epoch|unix|timestamp|time.?stamp)/.test(dateHeaderWords(header));
     }
 
-    function makeDateTimestamp(year, month, day, hour, minute, second, millis, zone, assumeUTC) {
+    function excelHeader(header) {
+      return /\b(?:excel|serial|date|datetime)\b/.test(dateHeaderWords(header));
+    }
+
+    function makeDateTimestamp(year, month, day, hour = 0, minute = 0,
+      second = 0, millis = 0, zone = '', assumeUTC = false) {
       if (year < 1600 || year > 9999 || month < 1 || month > 12 ||
-          day < 1 || day > 31 || hour > 23 || minute > 59 ||
-          second > 59 || millis > 999) return null;
+          day < 1 || day > 31 || hour < 0 || hour > 23 || minute < 0 ||
+          minute > 59 || second < 0 || second > 59 || millis < 0 ||
+          millis > 999) return null;
       const utc = Date.UTC(year, month - 1, day, hour, minute, second, millis);
       const check = new Date(utc);
-      if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 ||
-          check.getUTCDate() !== day) return null; // Rejects February 30, etc.
+      if (check.getUTCFullYear() !== year || check.getUTCMonth() + 1 !== month ||
+          check.getUTCDate() !== day) return null;
       if (zone || assumeUTC) {
-        if (!zone || zone.toUpperCase() === 'Z') return utc;
+        if (!zone || /^(?:z|utc|gmt)$/i.test(zone)) return utc;
         const m = /^([+-])(\d{2}):?(\d{2})$/.exec(zone);
         if (!m) return null;
         const zh = Number(m[2]), zm = Number(m[3]);
         if (zh > 14 || zm > 59 || (zh === 14 && zm !== 0)) return null;
         return utc - (m[1] === '+' ? 1 : -1) * (zh * 60 + zm) * 60000;
       }
-      // Without an explicit timezone, retain browser-local wall-clock time.
-      const local = new Date(year, month - 1, day, hour, minute, second, millis);
-      return local.getFullYear() === year && local.getMonth() === month - 1 &&
-        local.getDate() === day && local.getHours() === hour ? local.getTime() : null;
+      const d = new Date(year, month - 1, day, hour, minute, second, millis);
+      return d.getFullYear() === year && d.getMonth() + 1 === month &&
+        d.getDate() === day && d.getHours() === hour ? d.getTime() : null;
     }
 
-    function parseDateCell(value, order = 'DMY', allowEpoch = false, assumeUTC = false, allowCompact = false) {
+    function parseClock(value) {
+      // Both 24h and explicit 12h AM/PM, with optional offset.
+      const m = /^(\d{1,2}):(\d{2})(?::(\d{2})(?:[.,](\d{1,9}))?)?\s*(AM|PM)?\s*(Z|UTC|GMT|[+-]\d{2}:?\d{2})?$/i.exec(String(value).trim());
+      if (!m) return null;
+      let hour = Number(m[1]), minute = Number(m[2]), second = Number(m[3] || 0);
+      const ms = Number((m[4] || '').slice(0, 3).padEnd(3, '0'));
+      if (m[5]) {
+        if (hour < 1 || hour > 12) return null;
+        hour = (hour % 12) + (m[5].toUpperCase() === 'PM' ? 12 : 0);
+      }
+      if (hour > 23 || minute > 59 || second > 59) return null;
+      return { hour, minute, second, ms, zone: m[6] || '' };
+    }
+
+    function parseDateCell(value, order = 'DMY', allowEpoch = false, assumeUTC = false,
+      allowCompact = false, allowExcel = false) {
       if (value === null || value === undefined) return null;
       const s = String(value).trim();
       if (!s) return null;
 
-      // ISO 8601 dates and datetimes (also sortable YYYY/MM/DD and space separator).
-      let m = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?(Z|[+-]\d{2}:?\d{2})?)?$/i.exec(s);
-      if (m) return makeDateTimestamp(Number(m[1]), Number(m[2]), Number(m[3]),
-        Number(m[4] || 0), Number(m[5] || 0), Number(m[6] || 0),
-        Number((m[7] || '').slice(0, 3).padEnd(3, '0')), m[8] || '', assumeUTC);
-
-      // DD/MM/YYYY, MM/DD/YYYY, DD.MM.YYYY and variants with optional time.
-      m = /^(\d{1,2})[/. -](\d{1,2})[/. -](\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?)?$/.exec(s);
+      // Explicit year-first ISO 8601 / RFC 3339, with arbitrary fractional
+      // precision (to milliseconds for charting) and timezone offset.
+      let m = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[T ](.+))?$/i.exec(s);
       if (m) {
-        const first = Number(m[1]), second = Number(m[2]);
-        const d = order === 'MDY' ? second : first, mo = order === 'MDY' ? first : second;
-        return makeDateTimestamp(Number(m[3]), mo, d, Number(m[4] || 0),
-          Number(m[5] || 0), Number(m[6] || 0),
-          Number((m[7] || '').slice(0, 3).padEnd(3, '0')), '', assumeUTC);
+        const clock = m[4] ? parseClock(m[4]) : null;
+        if (m[4] && !clock) return null;
+        return makeDateTimestamp(+m[1], +m[2], +m[3],
+          clock ? clock.hour : 0, clock ? clock.minute : 0,
+          clock ? clock.second : 0, clock ? clock.ms : 0,
+          clock ? clock.zone : '', assumeUTC);
       }
 
-      // English month names: 31 Oct 2026 or Oct 31, 2026.
-      m = /^(\d{1,2})[ -]([a-z]{3,9})[ ,\-]+(\d{4})$/i.exec(s);
-      let year, month, day;
-      if (m) { day = Number(m[1]); month = m[2]; year = Number(m[3]); }
+      // Year-first separated strings and (header-confirmed) compact dates.
+      m = /^(\d{4})(\d{2})(\d{2})(?:[T ]?(\d{2})(\d{2})(\d{2})(?:[.,](\d{1,9}))?(Z|[+-]\d{2}:?\d{2})?)?$/.exec(s);
+      if (m && (allowCompact || Number(m[4]) >= 0 && !!m[4])) {
+        return makeDateTimestamp(+m[1], +m[2], +m[3], +(m[4] || 0),
+          +(m[5] || 0), +(m[6] || 0),
+          Number((m[7] || '').slice(0, 3).padEnd(3, '0')), m[8] || '', assumeUTC);
+      }
+
+      // DMY/MDY numeric dates, allow optional clock, zone and AM/PM.
+      m = /^(\d{1,2})[\/. -](\d{1,2})[\/. -](\d{4})(?:[ T](.+))?$/.exec(s);
+      if (m) {
+        const clock = m[4] ? parseClock(m[4]) : null;
+        if (m[4] && !clock) return null;
+        return makeDateTimestamp(+m[3], order === 'MDY' ? +m[1] : +m[2],
+          order === 'MDY' ? +m[2] : +m[1],
+          clock ? clock.hour : 0, clock ? clock.minute : 0,
+          clock ? clock.second : 0, clock ? clock.ms : 0,
+          clock ? clock.zone : '', assumeUTC);
+      }
+
+      // English month names with optional clock: '12 Nov 2026 3:04 PM',
+      // 'November 12, 2026', '2026-Nov-12', RFC 2822 weekday prefix.
+      const cleaned = s.replace(/^(?:mon|tue|wed|thu|fri|sat|sun)(?:day)?[,]?\s+/i, '');
+      let d, mo, y, tail;
+      m = /^(\d{1,2})[ ,\-]+([a-z]{3,9})[ ,\-]+(\d{4})(?:[ T](.+))?$/i.exec(cleaned);
+      if (m) { d = +m[1]; mo = m[2]; y = +m[3]; tail = m[4]; }
       else {
-        m = /^([a-z]{3,9})[ ](\d{1,2}),?[ ](\d{4})$/i.exec(s);
-        if (m) { month = m[1]; day = Number(m[2]); year = Number(m[3]); }
+        m = /^([a-z]{3,9})[ ](\d{1,2}),?[ ](\d{4})(?:[ T](.+))?$/i.exec(cleaned);
+        if (m) { mo = m[1]; d = +m[2]; y = +m[3]; tail = m[4]; }
+        else {
+          m = /^(\d{4})[- ]([a-z]{3,9})[- ](\d{1,2})(?:[ T](.+))?$/i.exec(cleaned);
+          if (m) { y = +m[1]; mo = m[2]; d = +m[3]; tail = m[4]; }
+        }
       }
       if (m) {
-        const names = ['january','february','march','april','may','june',
-          'july','august','september','october','november','december'];
-        const key = month.toLowerCase();
-        const idx = names.findIndex(name => key === name || key === name.slice(0, 3)
-          || (name === 'september' && key === 'sept'));
-        return idx < 0 ? null : makeDateTimestamp(year, idx + 1, day, 0, 0, 0, 0, '', assumeUTC);
+        const key = mo.toLowerCase();
+        const month = MONTH_NAMES.findIndex(name => name === key ||
+          name.slice(0, 3) === key || (name === 'september' && key === 'sept')) + 1;
+        if (!month) return null;
+        const clock = tail ? parseClock(tail) : null;
+        if (tail && !clock) return null;
+        return makeDateTimestamp(y, month, d, clock ? clock.hour : 0,
+          clock ? clock.minute : 0, clock ? clock.second : 0,
+          clock ? clock.ms : 0, clock ? clock.zone : '', assumeUTC);
       }
 
-      // Interpret integers as dates only if the header identifies them as such.
-      if (allowCompact && /^\d{8}$/.test(s)) {
-        return makeDateTimestamp(Number(s.slice(0, 4)), Number(s.slice(4, 6)),
-          Number(s.slice(6, 8)), 0, 0, 0, 0, '', assumeUTC);
+      // Numeric timestamps are potentially ambiguous with IDs: only allow
+      // when requested by the candidate detection policy.
+      if (allowEpoch && /^\d{9,10}(?:\.\d{1,9})?$|^\d{12,13}$|^\d{15,16}$|^\d{18,19}$/.test(s)) {
+        const intPart = s.split('.')[0];
+        let ms = Number(s);
+        if (intPart.length <= 10) ms *= 1000;
+        else if (intPart.length >= 18) ms /= 1e6;
+        else if (intPart.length >= 15) ms /= 1000;
+        ms = Math.round(ms);
+        return ms >= Date.UTC(1970, 0, 1) && ms <= Date.UTC(2100, 0, 1) ? ms : null;
       }
-      if (allowEpoch && /^(?:\d{10}(?:\.\d+)?|\d{13})$/.test(s)) {
-        const ms = /^\d{13}$/.test(s) ? Number(s) : Number(s) * 1000;
+
+      if (allowExcel && /^(?:\d{4,5})(?:\.\d{1,12})?$/.test(s)) {
+        const serial = Number(s);
+        const ms = Math.round((serial - 25569) * 86400000);
         return ms >= Date.UTC(1970, 0, 1) && ms <= Date.UTC(2100, 0, 1) ? ms : null;
       }
       return null;
     }
 
     function sampleRowIndices(length) {
+      // First/last + stratified interior, deterministic, no random overhead.
       const n = Math.min(DATE_SAMPLE_LIMIT, length);
-      if (n <= 1) return n ? [0] : [];
-      return Array.from({ length: n }, (_, i) => Math.round(i * (length - 1) / (n - 1)));
+      return n <= 1 ? (n ? [0] : []) :
+        Array.from({ length: n }, (_, i) => Math.round(i * (length - 1) / (n - 1)));
     }
 
-    function inferDateOrder(rows, indices, column, header) {
+    function inferDateOrder(rows, indices, col, header) {
+      const forced = document.getElementById('dateOrderSel').value;
+      if (forced === 'DMY' || forced === 'MDY') return forced;
       const h = dateHeaderWords(header);
-      if (/\bmdy\b|month.?first|us.?date/.test(h)) return 'MDY';
-      if (/\bdmy\b|day.?first|uk.?date/.test(h)) return 'DMY';
+      if (/\b(?:mdy|mm dd|month first|us date)\b/.test(h)) return 'MDY';
+      if (/\b(?:dmy|dd mm|day first|uk date)\b/.test(h)) return 'DMY';
       let dmy = 0, mdy = 0;
       for (const i of indices) {
-        const s = String(rows[i][column] ?? '').trim();
-        const m = /^(\d{1,2})[/. -](\d{1,2})[/. -]\d{4}/.exec(s);
+        const m = /^(\d{1,2})[\/. -](\d{1,2})[\/. -]\d{4}/.exec(String(rows[i][col] ?? '').trim());
         if (!m) continue;
-        if (Number(m[1]) > 12) dmy++;
-        if (Number(m[2]) > 12) mdy++;
+        if (+m[1] > 12 && +m[2] <= 12) dmy++;
+        if (+m[2] > 12 && +m[1] <= 12) mdy++;
       }
-      // Fully ambiguous 01/02/2026 defaults to DMY.
       return mdy > dmy ? 'MDY' : 'DMY';
+    }
+
+    function assessTemporal(values) {
+      let up = 0, down = 0, same = 0, prev = null, first = null, last = null;
+      for (const v of values) {
+        if (v === null) continue;
+        if (first === null) first = v;
+        last = v;
+        if (prev !== null) {
+          if (v > prev) up++; else if (v < prev) down++; else same++;
+        }
+        prev = v;
+      }
+      const steps = up + down + same;
+      return { chronology: steps ? Math.max(up, down) / steps : 0,
+        span: first === null ? 0 : Math.abs(last - first) };
+    }
+
+    function dateCandidate(headers, rows, indices, col, kind) {
+      const header = headers[col];
+      const hint = dateHeaderScore(header);
+      const order = inferDateOrder(rows, indices, col, header);
+      const assumeUTC = /\b(?:utc|gmt)\b/.test(dateHeaderWords(header));
+      const allowEpoch = epochHeader(header) || kind === 'epoch';
+      const allowExcel = excelHeader(header) && kind !== 'epoch';
+      const allowCompact = hint > 0 || kind === 'compact';
+      let nonempty = 0, valid = 0, iso = 0, timed = 0, locale = 0, numeric = 0;
+      const unique = new Set();
+      const values = [];
+      for (const i of indices) {
+        const value = String(rows[i][col] ?? '').trim();
+        if (!value) { values.push(null); continue; }
+        nonempty++;
+        const ts = parseDateCell(value, order, allowEpoch, assumeUTC, allowCompact, allowExcel);
+        values.push(ts);
+        if (ts === null) continue;
+        valid++;
+        unique.add(ts);
+        if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(value) || /^\d{8}T?\d{6}/.test(value)) iso++;
+        if (/[T ]\d{1,2}:\d{2}/.test(value) || /^\d{8}T?\d{6}/.test(value) ||
+            (allowEpoch && /^\d{9,10}(?:\.\d+)?$|^\d{12,13}$|^\d{15,16}$|^\d{18,19}$/.test(value))) timed++;
+        if (/^\d{1,2}[\/. -]\d{1,2}[\/. -]\d{4}/.test(value)) locale++;
+        if (/^\d+(?:\.\d+)?$/.test(value)) numeric++;
+      }
+      const coverage = indices.length ? nonempty / indices.length : 0;
+      const accuracy = nonempty ? valid / nonempty : 0;
+      const diversity = valid ? unique.size / valid : 0;
+      const temporal = assessTemporal(values);
+      const numericOnly = valid > 0 && numeric === valid;
+      // Sparse columns are legitimate if present cells consistently parse.
+      if (valid < Math.min(3, indices.length) || accuracy < 0.82 ||
+          coverage < 0.18 || (valid > 5 && unique.size < 2)) return null;
+      // Bare numeric column: require strong chronological evidence and
+      // widely spaced timestamp values or an explicit semantically apt header.
+      if (numericOnly && hint <= 0 &&
+          (coverage < 0.95 || accuracy < 0.98 || diversity < 0.9 ||
+           temporal.chronology < 0.9 || temporal.span < 1000)) return null;
+      let score = 65 * accuracy + 20 * coverage + 12 * diversity +
+        hint + 8 * iso / valid + 6 * timed / valid + 6 * temporal.chronology -
+        Math.min(3, col * 0.06);
+      if (numericOnly && hint <= 0) score -= 27;
+      const family = numericOnly ?
+        (allowEpoch && /^\d{9,10}(?:\.\d+)?$|^\d{12,13}$|^\d{15,16}$|^\d{18,19}$/.test(String(rows[indices.find(i => String(rows[i][col] ?? '').trim())][col]).trim()) ? 'Unix epoch' : 'Excel serial date') :
+        iso === valid ? (timed ? 'ISO datetime' : 'ISO date') :
+        timed ? 'Date and time' : 'Date';
+      const format = family + (locale ? ' (' + order + ')' : '');
+      return { type: 'single', index: col, cols: [col], score, format, order,
+        allowEpoch, assumeUTC, allowCompact, allowExcel,
+        accuracy, coverage, diversity, chronology: temporal.chronology,
+        ambiguous: locale > 0 && !indices.some(i => {
+          const m = /^(\d{1,2})[\/. -](\d{1,2})[\/. -]\d{4}/.exec(String(rows[i][col] ?? '').trim());
+          return m && (+m[1] > 12 || +m[2] > 12);
+        }), sampleSize: nonempty, valid };
+    }
+
+    function timeColumn(headers, rows, indices, col) {
+      const h = dateHeaderWords(headers[col]);
+      if (!/\b(?:time|clock|hh mm ss)\b/.test(h) || /\b(?:duration|elapsed|delta|offset|interval)\b/.test(h)) return null;
+      let valid = 0, nonempty = 0;
+      for (const i of indices) {
+        const s = String(rows[i][col] ?? '').trim();
+        if (!s) continue;
+        nonempty++;
+        if (parseClock(s)) valid++;
+      }
+      return nonempty >= 2 && valid / nonempty >= 0.85 ? { index: col, accuracy: valid / nonempty } : null;
+    }
+
+    function combineDateTime(dayValue, timeValue, dayCandidate) {
+      const ms = parseDateCell(dayValue, dayCandidate.order, false,
+        dayCandidate.assumeUTC, dayCandidate.allowCompact, dayCandidate.allowExcel);
+      const clock = parseClock(timeValue);
+      if (ms === null || !clock) return null;
+      const d = new Date(ms), utc = dayCandidate.assumeUTC || !!clock.zone;
+      const year = utc ? d.getUTCFullYear() : d.getFullYear();
+      const month = (utc ? d.getUTCMonth() : d.getMonth()) + 1;
+      const day = utc ? d.getUTCDate() : d.getDate();
+      return makeDateTimestamp(year, month, day, clock.hour, clock.minute,
+        clock.second, clock.ms, clock.zone, dayCandidate.assumeUTC);
     }
 
     function analyzeDateColumns(headers, rows) {
       const indices = sampleRowIndices(rows.length);
-      return headers.map((header, col) => {
-        const order = inferDateOrder(rows, indices, col, header);
-        const allowEpoch = epochHeader(header);
-        const allowCompact = dateHeaderScore(header) > 0;
-        const assumeUTC = /\b(?:utc|gmt)\b/.test(dateHeaderWords(header));
-        let nonempty = 0, valid = 0, iso = 0, timed = 0, localeDates = 0;
-        const unique = new Set();
-        for (const i of indices) {
-          const value = String(rows[i][col] ?? '').trim();
-          if (!value) continue;
-          nonempty++;
-          const ts = parseDateCell(value, order, allowEpoch, assumeUTC, allowCompact);
-          if (ts === null) continue;
-          valid++;
-          unique.add(ts);
-          if (/^\d{4}-\d{1,2}-\d{1,2}/.test(value)) iso++;
-          if (/^\d{1,2}[/. -]\d{1,2}[/. -]\d{4}/.test(value)) localeDates++;
-          if (/[T ]\d{1,2}:\d{2}/.test(value) ||
-              (allowEpoch && /^(?:\d{10}(?:\.\d+)?|\d{13})$/.test(value))) timed++;
-        }
-        const coverage = indices.length ? nonempty / indices.length : 0;
-        const accuracy = nonempty ? valid / nonempty : 0;
-        if (!valid || accuracy < 0.85 || coverage < 0.5 ||
-            (indices.length > 2 && unique.size < 2)) return null;
-        const score = 60 * accuracy + 18 * coverage + dateHeaderScore(header)
-          + 7 * iso / valid + 6 * timed / valid
-          + 5 * unique.size / valid - 0.2 * col;
-        const family = allowEpoch && timed === valid && iso === 0 ? 'Unix epoch' :
-          iso === valid ? (timed ? 'ISO 8601 datetime' : 'ISO 8601 date') :
-          timed ? 'Date/time' : 'Date';
-        const format = localeDates ? family + ' (' + order + ')' : family;
-        return { index: col, score, format, order, allowEpoch, assumeUTC, allowCompact };
+      const result = headers.map((_, col) => {
+        const plain = dateCandidate(headers, rows, indices, col, 'plain');
+        const epoch = dateCandidate(headers, rows, indices, col, 'epoch');
+        const compact = dateCandidate(headers, rows, indices, col, 'compact');
+        return [plain, epoch, compact].filter(Boolean).sort((a, b) => b.score - a.score)[0] || null;
       });
+      const times = headers.map((_, col) => timeColumn(headers, rows, indices, col)).filter(Boolean);
+      // Pair a date-only column with a separate clock column (usually adjacent).
+      const days = result.filter(v => v && !/datetime|and time|epoch/i.test(v.format));
+      const pairs = [];
+      for (const date of days.slice(0, 5)) for (const clock of times.slice(0, 5)) {
+        if (date.index === clock.index) continue;
+        let valid = 0, nonempty = 0;
+        for (const i of indices) {
+          const d = String(rows[i][date.index] ?? '').trim();
+          const t = String(rows[i][clock.index] ?? '').trim();
+          if (!d || !t) continue;
+          nonempty++;
+          if (combineDateTime(d, t, date) !== null) valid++;
+        }
+        if (nonempty < 2 || valid / nonempty < 0.85) continue;
+        pairs.push({ ...date, type: 'pair', cols: [date.index, clock.index],
+          timeIndex: clock.index, format: 'Combined date + time',
+          score: date.score + 11 + clock.accuracy * 5 - Math.min(5, Math.abs(clock.index - date.index)) });
+      }
+      return { singles: result, pairs };
     }
 
     function populateXColumnOptions() {
       const sel = document.getElementById('xColumnSel');
       const previous = sel.value || 'auto';
-      dateColumnCandidates = analyzeDateColumns(parsedHeaders, parsedRows);
-      bestDateColumn = dateColumnCandidates.filter(Boolean)
-        .sort((a, b) => b.score - a.score || a.index - b.index)[0] || null;
+      const found = analyzeDateColumns(parsedHeaders, parsedRows);
+      dateColumnCandidates = found.singles;
+      datePairs = found.pairs;
+      const ranked = [...found.singles.filter(Boolean), ...found.pairs]
+        .sort((a, b) => b.score - a.score || a.index - b.index);
+      bestDateColumn = ranked[0] || null;
       sel.innerHTML = '';
-      const bestIndex = bestDateColumn ? bestDateColumn.index : 0;
+      function labelFor(candidate) {
+        return candidate.cols.map(i => parsedHeaders[i] || 'Column ' + (i + 1)).join(' + ');
+      }
       const autoLabel = bestDateColumn
-        ? 'Auto: ' + parsedHeaders[bestIndex] + ' (' + bestDateColumn.format + ')'
+        ? 'Auto: ' + labelFor(bestDateColumn) + ' (' + bestDateColumn.format + ')'
         : 'Auto: ' + (parsedHeaders[0] || 'Column 1') + ' (category)';
       sel.add(new Option(autoLabel, 'auto'));
-      parsedHeaders.forEach((h, i) => sel.add(new Option(h || 'Column ' + (i + 1), String(i))));
-      sel.value = previous === 'auto' || (/^\d+$/.test(previous) &&
-        Number(previous) < parsedHeaders.length) ? previous : 'auto';
+      parsedHeaders.forEach((h, i) => {
+        const candidate = dateColumnCandidates[i];
+        sel.add(new Option((h || 'Column ' + (i + 1)) +
+          (candidate ? ' — ' + candidate.format : ' — category'), String(i)));
+      });
+      datePairs.forEach(pair => sel.add(new Option(
+        labelFor(pair) + ' — combined datetime', 'pair:' + pair.cols.join(':'))));
+      const allowed = new Set(['auto', ...parsedHeaders.map((_, i) => String(i)),
+        ...datePairs.map(pair => 'pair:' + pair.cols.join(':'))]);
+      sel.value = allowed.has(previous) ? previous : 'auto';
     }
 
     function updateXAxis() {
-      const selection = document.getElementById('xColumnSel').value;
-      xColumnIndex = selection === 'auto'
-        ? (bestDateColumn ? bestDateColumn.index : 0) : Number(selection);
-      const candidate = dateColumnCandidates[xColumnIndex];
-      dataIsDatetime = !!candidate;
+      const sel = document.getElementById('xColumnSel').value;
+      selectedX = sel === 'auto' ? bestDateColumn :
+        sel.startsWith('pair:') ? datePairs.find(p => 'pair:' + p.cols.join(':') === sel) :
+        dateColumnCandidates[Number(sel)];
+      xColumnIndex = selectedX ? selectedX.index : (sel === 'auto' ? 0 : Number(sel));
+      xColumnIndices = new Set(selectedX ? selectedX.cols : [xColumnIndex]);
+      dataIsDatetime = !!selectedX;
       xDataCache = parsedRows.map(row => {
-        const raw = row[xColumnIndex] ?? '';
-        if (!candidate) return raw;
-        const ms = parseDateCell(raw, candidate.order, candidate.allowEpoch,
-          candidate.assumeUTC, candidate.allowCompact);
+        if (!selectedX) return row[xColumnIndex] ?? '';
+        const ms = selectedX.type === 'pair'
+          ? combineDateTime(row[selectedX.index], row[selectedX.timeIndex], selectedX)
+          : parseDateCell(row[selectedX.index], selectedX.order,
+              selectedX.allowEpoch, selectedX.assumeUTC, selectedX.allowCompact, selectedX.allowExcel);
         return ms === null ? null : new Date(ms).toISOString();
       });
+      xAxisTitle = Array.from(xColumnIndices)
+        .map(i => parsedHeaders[i] || 'Column ' + (i + 1)).join(' + ');
+      detectionDetails = dataIsDatetime ?
+        'Detected ' + selectedX.format + ' · ' + Math.round(selectedX.accuracy * 100) +
+        '% of sampled nonempty entries valid' +
+        (selectedX.ambiguous ? ' · Ambiguous day/month order; use Date order selector if needed' : '') :
+        'No sufficiently reliable date/time column; using category X-axis.';
+      document.getElementById('datetime-detection').textContent = detectionDetails;
       document.getElementById('status').textContent =
         parsedRows.length.toLocaleString() + ' rows × ' + parsedHeaders.length + ' cols' +
         ' · ' + (lastFileBytes / 1024).toFixed(0) + ' KB' +
-        ' · X: ' + (parsedHeaders[xColumnIndex] || 'Column ' + (xColumnIndex + 1)) +
-        (candidate ? ' (' + candidate.format + ')' : ' (category)');
+        ' · X: ' + xAxisTitle + (selectedX ? ' (' + selectedX.format + ')' : ' (category)');
       updateDayNightWarning();
     }
 
     function onXColumnChange() {
       if (!parsedRows.length) return;
+      hiddenCols.clear();
+      updateXAxis();
+      buildColToggles();
+      scheduleChart();
+    }
+
+    function onDateOrderChange() {
+      if (!parsedRows.length) return;
+      const sel = document.getElementById('xColumnSel').value;
+      populateXColumnOptions();
+      document.getElementById('xColumnSel').value = sel;
       hiddenCols.clear();
       updateXAxis();
       buildColToggles();
@@ -475,6 +675,7 @@
       parsedRows = data.slice(1);
       hiddenCols.clear();
       document.getElementById('xColumnSel').value = 'auto';
+      document.getElementById('dateOrderSel').value = 'auto';
       populateXColumnOptions();
       updateXAxis();
       buildColToggles();
@@ -490,7 +691,7 @@
     function buildColToggles() {
       const div = document.getElementById('col-toggles');
       div.innerHTML = '';
-      const seriesCols = parsedHeaders.map((_, i) => i).filter(i => i !== xColumnIndex);
+      const seriesCols = parsedHeaders.map((_, i) => i).filter(i => !xColumnIndices.has(i));
       seriesCols.forEach(col => {
         const h = parsedHeaders[col];
         const lbl = document.createElement('label');
@@ -546,11 +747,11 @@
     }
 
     function onCellEdit() {
-      const oldXColumn = xColumnIndex;
+      const oldXColumns = Array.from(xColumnIndices).join(',');
       updateParsedFromTable();
       populateXColumnOptions();
       updateXAxis();
-      if (xColumnIndex !== oldXColumn) {
+      if (Array.from(xColumnIndices).join(',') !== oldXColumns) {
         hiddenCols.clear();
         buildColToggles();
       }
@@ -616,10 +817,10 @@
       const legendData = [];
 
       for (let col = 0; col < parsedHeaders.length; col++) {
-        if (col === xColumnIndex || hiddenCols.has(col)) continue;
+        if (xColumnIndices.has(col) || hiddenCols.has(col)) continue;
         const name = parsedHeaders[col];
         legendData.push(name);
-        const yData = parsedRows.map(r => { const n = Number(r[col]); return isNaN(n) ? null : n; });
+        const yData = parsedRows.map(r => { const v = String(r[col] ?? '').trim(); const n = Number(v); return !v || !Number.isFinite(n) ? null : n; });
         const s = {
           name, type,
           data: dataIsDatetime ? parsedRows.map((r, i) => [xData[i], yData[i]]) : yData,
@@ -667,7 +868,7 @@
         xAxis: {
           type: dataIsDatetime ? 'time' : 'category',
           data: dataIsDatetime ? undefined : xData,
-          name: parsedHeaders[xColumnIndex], nameLocation: 'middle', nameGap: 28,
+          name: xAxisTitle, nameLocation: 'middle', nameGap: 28,
           boundaryGap: type === 'bar',
           axisLabel: { rotate: xData.length > 20 ? 30 : 0, hideOverlap: true },
         },
@@ -685,9 +886,9 @@
       const traces = [];
 
       for (let col = 0; col < parsedHeaders.length; col++) {
-        if (col === xColumnIndex || hiddenCols.has(col)) continue;
+        if (xColumnIndices.has(col) || hiddenCols.has(col)) continue;
         const name = parsedHeaders[col];
-        const yData = parsedRows.map(r => { const n = Number(r[col]); return isNaN(n) ? null : n; });
+        const yData = parsedRows.map(r => { const v = String(r[col] ?? '').trim(); const n = Number(v); return !v || !Number.isFinite(n) ? null : n; });
         if (yData.every(v => v === null)) continue;
 
         const trace = { x: xData, y: yData, name };
@@ -725,7 +926,7 @@
 
       const layout = {
         xaxis: {
-          title: { text: parsedHeaders[xColumnIndex] },
+          title: { text: xAxisTitle },
           type: dataIsDatetime ? 'date' : 'category',
           automargin: true,
           rangeslider: { visible: parsedRows.length <= 5000 },
