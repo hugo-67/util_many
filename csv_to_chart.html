@@ -11,7 +11,8 @@
   KEY FEATURES:
     - Drag-and-drop or file-picker CSV import
     - Proper RFC 4180 CSV parsing (handles quoted fields)
-    - Auto-detects datetime x-axis
+    - Auto-selects best datetime X column from sampled data and column headers
+    - Supports ISO 8601 / common dates / Unix epochs, with X-axis override
     - Dual renderer:
         • Plotly 3.6.0  — default for files < 500 KB (rich interactivity)
         • ECharts 6.1.0 — default for files ≥ 500 KB (canvas large-data mode)
@@ -34,7 +35,8 @@
 
   USAGE:
     Open directly in a browser (no build step). Drop a CSV file or use the
-    file picker. First column = X axis; subsequent numeric columns = series.
+    file picker. Automatically picks the best date/time column for X or
+    falls back to the first column; other numeric columns are plotted.
 
   DEPENDENCIES (CDN, loaded as needed):
     - ECharts 6.1.0  : https://cdn.jsdelivr.net/npm/echarts@6.1.0/dist/echarts.min.js
@@ -44,6 +46,9 @@
     ECHARTS_THRESHOLD_BYTES = 500 * 1024  (500 KB) — edit to adjust auto-switch.
 
   CHANGELOG:
+    v2.3  2026-11-12  Header-aware, sampled date/time column selection;
+                    strict ISO/common date/epoch parsing, X-axis override,
+                    cached normalized timestamps for both renderers.
     v2.2  2026-06-25  Fixed night-band calculation to pair sunset→next sunrise
                     instead of clipping at UTC midnight (broke for UTC+8+).
                     Fixed Plotly shapes to use local naive date strings instead
@@ -131,6 +136,13 @@
 
     <span class="sep">|</span>
 
+    <label for="xColumnSel" style="font-size:0.85em">X-axis:</label>
+    <select id="xColumnSel" onchange="onXColumnChange()" aria-label="X-axis column">
+      <option value="auto">Auto</option>
+    </select>
+
+    <span class="sep">|</span>
+
     <label for="rendererSel" style="font-size:0.85em">Renderer:</label>
     <select id="rendererSel" onchange="onRendererChange()">
       <option value="auto">Auto (by file size)</option>
@@ -172,7 +184,11 @@
     let currentCSV = "";
     let parsedHeaders = [];
     let parsedRows = [];
-    let dataIsDatetime = false;   // true when first col parses as dates
+    let dataIsDatetime = false;   // true when selected X column contains dates
+    let xColumnIndex = 0;
+    let xDataCache = [];
+    let dateColumnCandidates = [];
+    let bestDateColumn = null;
     let activeRenderer = "plotly";
     let lastFileBytes = 0;
     let echart = null;
@@ -249,6 +265,198 @@
       ).join('\n');
     }
 
+
+    // ── Date/time detection ───────────────────────────────────────────────────
+    // Examine up to 96 spread-out rows per column, then normalize only the
+    // selected X column once. Redraws never re-run the detection.
+    const DATE_SAMPLE_LIMIT = 96;
+
+    function dateHeaderScore(header) {
+      const h = String(header || '').replace(/([a-z])([A-Z])/g, '$1 $2')
+        .replace(/[_\-]+/g, ' ').toLowerCase();
+      if (/\b(?:timestamp|time stamp|datetime|date time|unix|epoch)\b/.test(h)) return 22;
+      if (/\b(?:date|time|utc|gmt|recorded|observed|measured|created|updated)\b/.test(h)) return 14;
+      if (/\b(?:id|identifier|index|count|quantity|value|amount|price|latitude|longitude)\b/.test(h)) return -12;
+      return 0;
+    }
+
+    function epochHeader(header) {
+      return /\b(?:epoch|unix|timestamp|time.?stamp)\b/i
+        .test(String(header || '').replace(/[_\-]+/g, ' '));
+    }
+
+    function makeDateTimestamp(year, month, day, hour, minute, second, millis, zone, assumeUTC) {
+      if (year < 1600 || year > 9999 || month < 1 || month > 12 ||
+          day < 1 || day > 31 || hour > 23 || minute > 59 ||
+          second > 59 || millis > 999) return null;
+      const utc = Date.UTC(year, month - 1, day, hour, minute, second, millis);
+      const check = new Date(utc);
+      if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 ||
+          check.getUTCDate() !== day) return null; // Rejects February 30, etc.
+      if (zone || assumeUTC) {
+        if (!zone || zone.toUpperCase() === 'Z') return utc;
+        const m = /^([+-])(\d{2}):?(\d{2})$/.exec(zone);
+        if (!m) return null;
+        const zh = Number(m[2]), zm = Number(m[3]);
+        if (zh > 14 || zm > 59 || (zh === 14 && zm !== 0)) return null;
+        return utc - (m[1] === '+' ? 1 : -1) * (zh * 60 + zm) * 60000;
+      }
+      // Without an explicit timezone, retain browser-local wall-clock time.
+      const local = new Date(year, month - 1, day, hour, minute, second, millis);
+      return local.getFullYear() === year && local.getMonth() === month - 1 &&
+        local.getDate() === day && local.getHours() === hour ? local.getTime() : null;
+    }
+
+    function parseDateCell(value, order = 'DMY', allowEpoch = false, assumeUTC = false, allowCompact = false) {
+      if (value === null || value === undefined) return null;
+      const s = String(value).trim();
+      if (!s) return null;
+
+      // ISO 8601 dates and datetimes (also sortable YYYY/MM/DD and space separator).
+      let m = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?(Z|[+-]\d{2}:?\d{2})?)?$/i.exec(s);
+      if (m) return makeDateTimestamp(Number(m[1]), Number(m[2]), Number(m[3]),
+        Number(m[4] || 0), Number(m[5] || 0), Number(m[6] || 0),
+        Number((m[7] || '').slice(0, 3).padEnd(3, '0')), m[8] || '', assumeUTC);
+
+      // DD/MM/YYYY, MM/DD/YYYY, DD.MM.YYYY and variants with optional time.
+      m = /^(\d{1,2})[/. -](\d{1,2})[/. -](\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?)?$/.exec(s);
+      if (m) {
+        const first = Number(m[1]), second = Number(m[2]);
+        const d = order === 'MDY' ? second : first, mo = order === 'MDY' ? first : second;
+        return makeDateTimestamp(Number(m[3]), mo, d, Number(m[4] || 0),
+          Number(m[5] || 0), Number(m[6] || 0),
+          Number((m[7] || '').slice(0, 3).padEnd(3, '0')), '', assumeUTC);
+      }
+
+      // English month names: 31 Oct 2026 or Oct 31, 2026.
+      m = /^(\d{1,2})[ -]([a-z]{3,9})[ ,\-]+(\d{4})$/i.exec(s);
+      let year, month, day;
+      if (m) { day = Number(m[1]); month = m[2]; year = Number(m[3]); }
+      else {
+        m = /^([a-z]{3,9})[ ](\d{1,2}),?[ ](\d{4})$/i.exec(s);
+        if (m) { month = m[1]; day = Number(m[2]); year = Number(m[3]); }
+      }
+      if (m) {
+        const names = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+        const idx = names.indexOf(month.toLowerCase().slice(0, 3));
+        return idx < 0 ? null : makeDateTimestamp(year, idx + 1, day, 0, 0, 0, 0, '', assumeUTC);
+      }
+
+      // Interpret integers as dates only if the header identifies them as such.
+      if (allowCompact && /^\d{8}$/.test(s)) {
+        return makeDateTimestamp(Number(s.slice(0, 4)), Number(s.slice(4, 6)),
+          Number(s.slice(6, 8)), 0, 0, 0, 0, '', assumeUTC);
+      }
+      if (allowEpoch && /^(?:\d{10}(?:\.\d+)?|\d{13})$/.test(s)) {
+        const ms = s.length === 13 ? Number(s) : Number(s) * 1000;
+        return ms >= Date.UTC(2000, 0, 1) && ms <= Date.UTC(2100, 0, 1) ? ms : null;
+      }
+      return null;
+    }
+
+    function sampleRowIndices(length) {
+      const n = Math.min(DATE_SAMPLE_LIMIT, length);
+      if (n <= 1) return n ? [0] : [];
+      return Array.from({ length: n }, (_, i) => Math.round(i * (length - 1) / (n - 1)));
+    }
+
+    function inferDateOrder(rows, indices, column, header) {
+      const h = String(header || '').toLowerCase();
+      if (/\bmdy\b|month.?first|us.?date/.test(h)) return 'MDY';
+      if (/\bdmy\b|day.?first|uk.?date/.test(h)) return 'DMY';
+      let dmy = 0, mdy = 0;
+      for (const i of indices) {
+        const s = String(rows[i][column] ?? '').trim();
+        const m = /^(\d{1,2})[/. -](\d{1,2})[/. -]\d{4}/.exec(s);
+        if (!m) continue;
+        if (Number(m[1]) > 12) dmy++;
+        if (Number(m[2]) > 12) mdy++;
+      }
+      // Fully ambiguous 01/02/2026 defaults to DMY.
+      return mdy > dmy ? 'MDY' : 'DMY';
+    }
+
+    function analyzeDateColumns(headers, rows) {
+      const indices = sampleRowIndices(rows.length);
+      return headers.map((header, col) => {
+        const order = inferDateOrder(rows, indices, col, header);
+        const allowEpoch = epochHeader(header);
+        const allowCompact = dateHeaderScore(header) > 0;
+        const assumeUTC = /\b(?:utc|gmt)\b/i.test(String(header || '').replace(/[_\-]+/g, ' '));
+        let nonempty = 0, valid = 0, iso = 0, timed = 0;
+        const unique = new Set();
+        for (const i of indices) {
+          const value = String(rows[i][col] ?? '').trim();
+          if (!value) continue;
+          nonempty++;
+          const ts = parseDateCell(value, order, allowEpoch, assumeUTC, allowCompact);
+          if (ts === null) continue;
+          valid++;
+          unique.add(ts);
+          if (/^\d{4}-\d{1,2}-\d{1,2}/.test(value)) iso++;
+          if (/[T ]\d{1,2}:\d{2}/.test(value) ||
+              (allowEpoch && /^(?:\d{10}(?:\.\d+)?|\d{13})$/.test(value))) timed++;
+        }
+        const coverage = indices.length ? nonempty / indices.length : 0;
+        const accuracy = nonempty ? valid / nonempty : 0;
+        if (!valid || accuracy < 0.85 || coverage < 0.5 ||
+            (indices.length > 2 && unique.size < 2)) return null;
+        const score = 60 * accuracy + 18 * coverage + dateHeaderScore(header)
+          + 7 * iso / valid + 6 * timed / valid
+          + 5 * unique.size / valid - 0.2 * col;
+        const format = allowEpoch && timed === valid && iso === 0 ? 'Unix epoch' :
+          iso === valid ? (timed ? 'ISO 8601 datetime' : 'ISO 8601 date') :
+          timed ? 'Date/time' : 'Date';
+        return { index: col, score, format, order, allowEpoch, assumeUTC, allowCompact };
+      });
+    }
+
+    function populateXColumnOptions() {
+      const sel = document.getElementById('xColumnSel');
+      const previous = sel.value || 'auto';
+      dateColumnCandidates = analyzeDateColumns(parsedHeaders, parsedRows);
+      bestDateColumn = dateColumnCandidates.filter(Boolean)
+        .sort((a, b) => b.score - a.score || a.index - b.index)[0] || null;
+      sel.innerHTML = '';
+      const bestIndex = bestDateColumn ? bestDateColumn.index : 0;
+      const autoLabel = bestDateColumn
+        ? 'Auto: ' + parsedHeaders[bestIndex] + ' (' + bestDateColumn.format + ')'
+        : 'Auto: ' + (parsedHeaders[0] || 'Column 1') + ' (category)';
+      sel.add(new Option(autoLabel, 'auto'));
+      parsedHeaders.forEach((h, i) => sel.add(new Option(h || 'Column ' + (i + 1), String(i))));
+      sel.value = previous === 'auto' || (/^\d+$/.test(previous) &&
+        Number(previous) < parsedHeaders.length) ? previous : 'auto';
+    }
+
+    function updateXAxis() {
+      const selection = document.getElementById('xColumnSel').value;
+      xColumnIndex = selection === 'auto'
+        ? (bestDateColumn ? bestDateColumn.index : 0) : Number(selection);
+      const candidate = dateColumnCandidates[xColumnIndex];
+      dataIsDatetime = !!candidate;
+      xDataCache = parsedRows.map(row => {
+        const raw = row[xColumnIndex] ?? '';
+        if (!candidate) return raw;
+        const ms = parseDateCell(raw, candidate.order, candidate.allowEpoch,
+          candidate.assumeUTC, candidate.allowCompact);
+        return ms === null ? null : new Date(ms).toISOString();
+      });
+      document.getElementById('status').textContent =
+        parsedRows.length.toLocaleString() + ' rows × ' + parsedHeaders.length + ' cols' +
+        ' · ' + (lastFileBytes / 1024).toFixed(0) + ' KB' +
+        ' · X: ' + (parsedHeaders[xColumnIndex] || 'Column ' + (xColumnIndex + 1)) +
+        (candidate ? ' (' + candidate.format + ')' : ' (category)');
+      updateDayNightWarning();
+    }
+
+    function onXColumnChange() {
+      if (!parsedRows.length) return;
+      hiddenCols.clear();
+      updateXAxis();
+      buildColToggles();
+      scheduleChart();
+    }
+
     // ── Load & process CSV ───────────────────────────────────────────────────
     function loadCSV(csv, fileBytes) {
       currentCSV = csv;
@@ -257,11 +465,10 @@
       if (data.length < 2) return;
       parsedHeaders = data[0];
       parsedRows = data.slice(1);
-      dataIsDatetime = parsedRows.length > 0 && !isNaN(Date.parse(parsedRows[0][0]));
-      document.getElementById('status').textContent =
-        `${parsedRows.length.toLocaleString()} rows × ${parsedHeaders.length} cols` +
-        ` · ${(lastFileBytes / 1024).toFixed(0)} KB`;
       hiddenCols.clear();
+      document.getElementById('xColumnSel').value = 'auto';
+      populateXColumnOptions();
+      updateXAxis();
       buildColToggles();
       activeRenderer = resolveRenderer();
       updateBadge();
@@ -275,8 +482,9 @@
     function buildColToggles() {
       const div = document.getElementById('col-toggles');
       div.innerHTML = '';
-      parsedHeaders.slice(1).forEach((h, i) => {
-        const col = i + 1;
+      const seriesCols = parsedHeaders.map((_, i) => i).filter(i => i !== xColumnIndex);
+      seriesCols.forEach(col => {
+        const h = parsedHeaders[col];
         const lbl = document.createElement('label');
         const cb = document.createElement('input');
         cb.type = 'checkbox'; cb.checked = true;
@@ -288,10 +496,10 @@
         // Derive the mode from the current selection, so manual edits don't leave
         // behind stale toggle state. The two preceding clicks cancel each other.
         lbl.addEventListener('dblclick', () => {
-          const onlyThisVisible = hiddenCols.size === parsedHeaders.length - 2
+          const onlyThisVisible = hiddenCols.size === seriesCols.length - 1
             && !hiddenCols.has(col);
           div.querySelectorAll('input[type="checkbox"]').forEach((checkbox, index) => {
-            const column = index + 1;
+            const column = seriesCols[index];
             const visible = onlyThisVisible ? column !== col : column === col;
             checkbox.checked = visible;
             if (visible) hiddenCols.delete(column); else hiddenCols.add(column);
@@ -329,7 +537,17 @@
       container.innerHTML = ''; container.appendChild(frag);
     }
 
-    function onCellEdit() { updateParsedFromTable(); scheduleChart(); }
+    function onCellEdit() {
+      const oldXColumn = xColumnIndex;
+      updateParsedFromTable();
+      populateXColumnOptions();
+      updateXAxis();
+      if (xColumnIndex !== oldXColumn) {
+        hiddenCols.clear();
+        buildColToggles();
+      }
+      scheduleChart();
+    }
 
     function updateParsedFromTable() {
       const rows = Array.from(document.querySelectorAll('#table-container table tr'));
@@ -385,18 +603,18 @@
       const type = document.getElementById('chartType').value;
       const smooth = document.getElementById('smoothLine').checked;
       const stack = document.getElementById('stackSeries').checked;
-      const xData = parsedRows.map(r => r[0]);
+      const xData = xDataCache;
       const series = [];
       const legendData = [];
 
-      for (let col = 1; col < parsedHeaders.length; col++) {
-        if (hiddenCols.has(col)) continue;
+      for (let col = 0; col < parsedHeaders.length; col++) {
+        if (col === xColumnIndex || hiddenCols.has(col)) continue;
         const name = parsedHeaders[col];
         legendData.push(name);
         const yData = parsedRows.map(r => { const n = Number(r[col]); return isNaN(n) ? null : n; });
         const s = {
           name, type,
-          data: dataIsDatetime ? parsedRows.map((r, i) => [r[0], yData[i]]) : yData,
+          data: dataIsDatetime ? parsedRows.map((r, i) => [xData[i], yData[i]]) : yData,
           large: true, largeThreshold: 2000,
           universalTransition: true,
         };
@@ -441,7 +659,7 @@
         xAxis: {
           type: dataIsDatetime ? 'time' : 'category',
           data: dataIsDatetime ? undefined : xData,
-          name: parsedHeaders[0], nameLocation: 'middle', nameGap: 28,
+          name: parsedHeaders[xColumnIndex], nameLocation: 'middle', nameGap: 28,
           boundaryGap: type === 'bar',
           axisLabel: { rotate: xData.length > 20 ? 30 : 0, hideOverlap: true },
         },
@@ -455,11 +673,11 @@
       const rawType = document.getElementById('chartType').value;
       const smooth = document.getElementById('smoothLine').checked;
       const stack = document.getElementById('stackSeries').checked;
-      const xData = parsedRows.map(r => r[0]);
+      const xData = xDataCache;
       const traces = [];
 
-      for (let col = 1; col < parsedHeaders.length; col++) {
-        if (hiddenCols.has(col)) continue;
+      for (let col = 0; col < parsedHeaders.length; col++) {
+        if (col === xColumnIndex || hiddenCols.has(col)) continue;
         const name = parsedHeaders[col];
         const yData = parsedRows.map(r => { const n = Number(r[col]); return isNaN(n) ? null : n; });
         if (yData.every(v => v === null)) continue;
@@ -487,10 +705,9 @@
         shapes = ranges.map(([s, e]) => ({
           type: 'rect',
           xref: 'x', yref: 'paper',
-          // Use local naive strings (not UTC ISO) so Plotly parses them via
-          // new Date() — the same path it uses for the trace's CSV date strings.
-          x0: toLocalDateStr(s),
-          x1: toLocalDateStr(e),
+          // Trace and shaded intervals use the same normalized UTC ISO basis.
+          x0: new Date(s).toISOString(),
+          x1: new Date(e).toISOString(),
           y0: 0, y1: 1,
           fillcolor: 'rgba(20, 20, 70, 0.10)',
           line: { width: 0 },
@@ -500,8 +717,8 @@
 
       const layout = {
         xaxis: {
-          title: { text: parsedHeaders[0] },
-          type: 'date',
+          title: { text: parsedHeaders[xColumnIndex] },
+          type: dataIsDatetime ? 'date' : 'category',
           automargin: true,
           rangeslider: { visible: parsedRows.length <= 5000 },
         },
@@ -660,10 +877,16 @@
     // so night bands are correct even when sunrise falls on the previous UTC day
     // (as happens for UTC+8 and higher, e.g. Singapore, Japan, Australia).
     function computeNightRanges(xData, lat, lon) {
-      const times = xData.map(s => new Date(s).getTime()).filter(t => !isNaN(t));
-      if (times.length < 2) return [];
-      const minT = Math.min(...times);
-      const maxT = Math.max(...times);
+      let minT = Infinity, maxT = -Infinity, count = 0;
+      for (const s of xData) {
+        if (s === null || s === undefined || s === '') continue;
+        const t = new Date(s).getTime();
+        if (!Number.isFinite(t)) continue;
+        count++;
+        if (t < minT) minT = t;
+        if (t > maxT) maxT = t;
+      }
+      if (count < 2 || minT === maxT) return [];
 
       // Expand the search window by one day on each side so we capture
       // partial nights that begin/end just outside the data range.
@@ -707,17 +930,6 @@
       }
 
       return ranges;
-    }
-
-    // Format a UTC-ms timestamp as a local naive datetime string
-    // ("YYYY-MM-DD HH:MM:SS") so that Plotly parses it through new Date(),
-    // the same path used for naive CSV date strings. This keeps shape
-    // boundaries in the same coordinate system as the trace x-data.
-    function toLocalDateStr(ms) {
-      const d = new Date(ms);
-      const p = n => String(n).padStart(2, '0');
-      return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ` +
-             `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
     }
 
     // ── File input ───────────────────────────────────────────────────────────
