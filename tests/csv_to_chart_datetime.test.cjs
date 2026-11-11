@@ -241,4 +241,63 @@ test('missing numeric Y values remain null rather than becoming zero', () => {
   assert.equal(echartsOption.series[0].data[2][1], null);
 });
 
+
+test('date-only ISO and locale dates render as chronological midnight X coordinates', () => {
+  const csv = [
+    'Count,Date,Value',
+    '1,2026-11-12,14',
+    '2,2026-11-13,15',
+    '3,2026-11-14,16',
+  ].join('\n');
+  context.loadCSV(csv, csv.length);
+  assert.match(element('status').textContent, /X: Date \(ISO date\)/);
+  context.renderECharts();
+  assert.equal(echartsOption.xAxis.type, 'time');
+  assert.equal(echartsOption.series[0].data[0][0], new Date(2026,10,12).toISOString());
+  context.renderPlotly();
+  assert.equal(plotlyResult.layout.xaxis.type, 'date');
+  const locale = 'Count,Date,Value\n1,12/11/2026,14\n2,13/11/2026,15\n3,14/11/2026,16';
+  context.loadCSV(locale, locale.length);
+  context.renderECharts();
+  assert.equal(echartsOption.xAxis.type, 'time');
+  assert.equal(echartsOption.series[0].data[0][0], new Date(2026,10,12).toISOString());
+});
+test('full timestamp beats date-only even when date appears earlier or has a stronger title', () => {
+  const csv = [
+    'Date,event,Reading,DATE_TIME_MEASURED',
+    '2026-11-12,2026-11-12T10:11:12+08:00,1,2026-11-12',
+    '2026-11-13,2026-11-13T10:11:12+08:00,2,2026-11-13',
+    '2026-11-14,2026-11-14T10:11:12+08:00,3,2026-11-14',
+  ].join('\n');
+  context.loadCSV(csv, csv.length);
+  assert.match(element('status').textContent, /X: event \(ISO datetime\)/);
+  context.renderECharts();
+  assert.equal(echartsOption.series[0].data[0][0], '2026-11-12T02:11:12.000Z');
+  element('xColumnSel').value='0';
+  context.onXColumnChange();
+  context.renderECharts();
+  assert.equal(echartsOption.xAxis.type, 'time');
+  assert.equal(echartsOption.series[0].data[0][0], new Date(2026,10,12).toISOString());
+});
+test('combined date + clock outranks a standalone date column', () => {
+  const csv = [
+    'DATE_ONLY,Date,Time,Reading',
+    '2026-11-12,2026-11-12,14:30,1',
+    '2026-11-13,2026-11-13,14:31,2',
+    '2026-11-14,2026-11-14,14:32,3',
+  ].join('\n');
+  context.loadCSV(csv, csv.length);
+  assert.match(element('status').textContent, /X: Date \+ Time/);
+  context.renderECharts();
+  assert.equal(echartsOption.xAxis.type, 'time');
+  assert.equal(echartsOption.series.length, 2);
+});
+test('date-only with missing values remains valid when sample coverage permits', () => {
+  const csv='ID,Date,Reading\n1,2026-11-12,2\n2,,3\n3,2026-11-14,4\n4,2026-11-15,5';
+  context.loadCSV(csv, csv.length);
+  assert.match(element('status').textContent, /X: Date/);
+  context.renderECharts();
+  assert.equal(echartsOption.series[0].data[1][0], null);
+});
+
 console.log('\n' + passed + ' datetime detection/integration test groups passed.');
